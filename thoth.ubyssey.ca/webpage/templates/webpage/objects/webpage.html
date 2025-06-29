@@ -1,0 +1,6 @@
+
+<li class="{% if webpage.is_source %}source{% endif %}">
+    <span><a href="{{webpage.url}}">{{webpage.url}}</a></span>
+    <span>{{webpage.title}}</span> <span>{{webpage.time_updated}}</span>
+    <p>{{webpage.description}}</p>
+</li>
