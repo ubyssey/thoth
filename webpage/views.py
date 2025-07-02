@@ -1,11 +1,16 @@
 from django.shortcuts import render
 from django.http import HttpResponse
-from django.db.models import Q
+from django.db.models import Q, F
 from django.utils import timezone
+from django.urls import include, path
 
-from .models import Domain
+from rest_framework import serializers, viewsets, filters
+
 import asyncio
 from asgiref.sync import async_to_sync, sync_to_async
+
+import thoth.views as views
+from webpage.models import WebPage, Domain, Referral
 
 # Create your views here.
 
@@ -28,3 +33,27 @@ async def scrape_all():
             tasks = []
 
     await asyncio.gather(*tasks)
+
+# Serializers define the API representation.
+class WebPageSerializer(serializers.HyperlinkedModelSerializer):
+    class Meta:
+        model = WebPage
+        fields = ['url', 'title', 'description', 'time_updated']
+
+# ViewSets define the view behavior.
+class WebPageViewSet(viewsets.ModelViewSet):
+    queryset = WebPage.objects.filter(is_redirect=False, domain__is_redirect=False)
+    filter_backends = [filters.SearchFilter]
+    serializer_class = WebPageSerializer
+
+# Serializers define the API representation.
+class DomainSerializer(serializers.HyperlinkedModelSerializer):
+    class Meta:
+        model = Domain
+        fields = ['url', 'title', 'description', 'time_updated']
+
+# ViewSets define the view behavior.
+class DomainViewSet(viewsets.ModelViewSet):
+    queryset = Domain.objects.filter(is_redirect=False)
+    filter_backends = [filters.SearchFilter]
+    serializer_class = DomainSerializer

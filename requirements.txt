@@ -10,9 +10,13 @@ bs4==0.0.2
 certifi==2025.4.26
 charset-normalizer==3.4.2
 Django==4.2.21
+django-cors-headers==4.7.0
+django-filter==25.1
+djangorestframework==3.16.0
 frozenlist==1.6.0
 gensim==4.3.3
 idna==3.10
+Markdown==3.8.2
 multidict==6.4.4
 numpy==1.26.4
 pgvector==0.4.1

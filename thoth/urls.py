@@ -17,7 +17,18 @@ Including another URLconf
 
 from django.contrib import admin
 from django.urls import include, path
+
+import rest_framework
+from rest_framework import routers
+
 import thoth.views as views
+from webpage.views import WebPageViewSet, DomainViewSet
+
+
+# Routers provide an easy way of automatically determining the URL conf.
+router = routers.DefaultRouter()
+router.register(r'webpages', WebPageViewSet)
+router.register(r'domains', DomainViewSet)
 
 urlpatterns = [
     path("webpage/", include("webpage.urls")),
@@ -25,4 +36,6 @@ urlpatterns = [
 
     path("domain/<int:domain_id>/", views.domain, name="domain"), 
     path("", views.index, name="index"),   
+    path('api-auth/', include('rest_framework.urls')),
+    path("api/", include(router.urls)),
 ]
