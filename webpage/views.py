@@ -22,7 +22,7 @@ async def scrape_all():
         if wps == None:
             continue
         async for wp in wps:
-            tasks.append(asyncio.create_task(wp.scrape()))
+            tasks.append(asyncio.create_task(wp.hit()))
         if len(tasks) > 50:
             await asyncio.gather(*tasks)
             tasks = []
