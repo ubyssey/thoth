@@ -11,6 +11,8 @@ from bs4 import BeautifulSoup
 import json 
 
 HEADER = {'user-agent': 'The Society of Thoth'}
+WP_API_FIRST_PAGE_SIZE = 20
+WP_API_MAX_PAGE_SIZE = 100
 
 def crawl_worthy(url):
     return "ubc.ca" in url
@@ -38,19 +40,6 @@ def get_link_level(link):
 
     return level
 
-def get_link(url, title=None, page_type="html"):
-    if WebPage.objects.filter(url=url).exists():
-        return WebPage.objects.get(url=url)
-    else:
-        if title == None:
-            title = url
-        return WebPage.objects.create(
-            url=url,
-            title=title,
-            page_type=page_type,
-            )
-    return None
-
 def transform_anchor(anchor, webpage_domain_str):
     link = anchor.get("href")
     if link == None or link == "":
@@ -71,55 +60,69 @@ def transform_anchor(anchor, webpage_domain_str):
     return url
 
 @sync_to_async
-def obtain_new_url(url, title, referrer=None, description=None, time_updated=None, time_last_requested=None, time_discovered=None):
-    link_parse = urlparse(url)
-    destination = None
+def obtain_new_url(url, title, referrer=None, description=None, page_type="html", time_updated=None, time_last_requested=None, time_discovered=None):
+    #print(f'start obtain {url}')
+    try:
+        destination = None
 
-    is_crawl_worthy = crawl_worthy(url)
-    if referrer != None:
-        is_crawl_worthy = is_crawl_worthy or crawl_worthy(referrer.url)
+        is_crawl_worthy = crawl_worthy(url)
+        if referrer != None:
+            is_crawl_worthy = is_crawl_worthy or crawl_worthy(referrer.url)
 
-    if not WebPage.objects.filter(url=url).exists():
-        if is_crawl_worthy:
+        if not WebPage.objects.filter(url=url).exists():
+            if is_crawl_worthy:
 
-            destination = WebPage.objects.create(
-                url=url,
-                title=title,
-                description=description,
-                time_updated=time_updated,
-                time_last_requested=time_last_requested,
-                time_discovered=time_discovered,
+                destination = WebPage.objects.create(
+                    url=url,
+                    title=title,
+                    description=description,
+                    time_updated=time_updated,
+                    time_last_requested=time_last_requested,
+                    time_discovered=time_discovered,
+                    page_type=page_type
+                    )
+        else:
+            destination = WebPage.objects.get(url=url)
+
+            if description != None or time_updated != None or time_last_requested != None:
+                changes = False
+
+                if description != None and destination.description != description:
+                    destination.description = description
+                    changes = True
+                if time_updated != None and destination.time_updated != time_updated:
+                    destination.time_updated = time_updated
+                    changes = True
+                if time_last_requested != None and destination.time_last_requested != time_last_requested:
+                    destination.time_last_requested = time_last_requested
+                    changes = True
+                    
+                if changes:
+                    destination.save()
+
+        if destination != None and time_updated != None:
+            destination_domain = destination.domain
+            if destination_domain.time_updated == None:
+                destination_domain.time_updated = time_updated
+                destination_domain.save()
+            elif time_updated > destination_domain.time_updated:
+                destination_domain.time_updated = time_updated
+                destination_domain.save()
+
+        if destination != None and referrer != None:
+            if not Referral.objects.filter(source_webpage=referrer, destination_webpage=destination).exists():
+                Referral.objects.create(
+                    source_webpage = referrer,
+                    destination_webpage = destination
                 )
-    else:
-        destination = WebPage.objects.get(url=url)
-
-        if description != None or time_updated != None or time_last_requested != None:
-            if description != None:
-                destination.description = description
-            if time_updated != None:
-                destination.time_updated = time_updated
-            if time_last_requested != None:
-                destination.time_last_requested = time_last_requested
-                
-            destination.save()
-
-    if destination != None and time_updated != None:
-        destination_domain = destination.domain
-        if destination_domain.time_updated == None:
-            destination_domain.time_updated = time_updated
-            destination_domain.save()
-        elif time_updated > destination_domain.time_updated:
-            destination_domain.time_updated = time_updated
-            destination_domain.save()
-
-    if destination != None and referrer != None:
-        if not Referral.objects.filter(source_webpage=referrer, destination_webpage=destination).exists():
-            Referral.objects.create(
-                source_webpage = referrer,
-                destination_webpage = destination
-            )
-
-    return destination
+        #print(f'obtained {url}')
+        return destination
+    except Exception as e: 
+        if referrer != None:
+            print(f"error: {url} from {referrer.url}, {e}")            
+        else:
+            print(f"error: {url}, {e}")
+        return None
 
 # Create your models here.
 
@@ -152,8 +155,8 @@ class Domain(AbstractWebObject):
     async def get_webpage_to_hit(self):
         print("domain: " + self.url)
         HIT_COUNT = 1
-        #HIT_TIMEOUT = timezone.timedelta(hours = 3)
-        HIT_TIMEOUT = timezone.timedelta(minutes = 1)
+        HIT_TIMEOUT = timezone.timedelta(hours = 3)
+        #HIT_TIMEOUT = timezone.timedelta(minutes = 1)
 
         time_cutoff = timezone.now() - HIT_TIMEOUT
 
@@ -199,38 +202,23 @@ class WebPage(AbstractWebObject):
     page_type = models.CharField(max_length=50, default="html")
 
     objects = WebPageManager()
-    
-    @sync_to_async
-    def new_link(self, link, name):
-        link_parse = urlparse(link)
-        destination = None
-        is_new = False
-
-        if not WebPage.objects.filter(url=link).exists():
-            if crawl_worthy(self.url) or crawl_worthy(link):
-
-                destination = WebPage.objects.create(
-                    url=link,
-                    title=name
-                    )
-            is_new = True
-        else:
-            destination = WebPage.objects.get(url=link)
-
-        if destination != None:
-            if not Referral.objects.filter(source_webpage=self, destination_webpage=destination).exists():
-                Referral.objects.create(
-                    source_webpage = self,
-                    destination_webpage = destination
-                )
-
-        return is_new
 
     async def hit(self):
         print(" - hit: " + self.url)
         if not "http" in self.url:
             await self.adelete()
             return
+        impostors = WebPage.objects.filter(domain_id=self.domain_id, url=self.url).exclude(id=self.id)
+        if await impostors.aexists():
+            async for impostor in impostors:
+                print(f' delete: {impostor.url}')
+                await impostor.adelete()
+
+        if self.page_type == "wordpress api":
+            if "?page=1&per_page=" in self.url and not f"?page=1&per_page={WP_API_FIRST_PAGE_SIZE}" in self.url:
+                self.url = self.url.split("?page=1")[0] + f"?page=1&per_page={WP_API_FIRST_PAGE_SIZE}&orderby=modified&order=desc"
+                await self.asave()
+                print(f"fixed {self.url}")
 
         try:
             async with aiohttp.ClientSession(headers=HEADER, max_line_size=8190 * 2, max_field_size=8190 * 2) as session:
@@ -250,7 +238,7 @@ class WebPage(AbstractWebObject):
                                 domain.is_redirect = True
                                 await domain.asave()
 
-                        redirect_webpage = await sync_to_async(get_link)(url, title=self.title, page_type=self.page_type)
+                        redirect_webpage = await sync_to_async(obtain_new_url)(url, title=self.title, page_type=self.page_type, time_discovered=self.time_discovered)
                         if redirect_webpage != None:
                             requested_page = redirect_webpage
 
@@ -275,16 +263,18 @@ class WebPage(AbstractWebObject):
         self.time_last_requested = timezone.now()
 
         for api in ["pages", "posts", "media", "tribe_events"]:
-            if f"/wp/v2/{api}" in info["routes"] and not await WebPage.objects.filter(domain_id=self.domain_id, url__contains=f"/wp/v2/{api}?page=1").aexists():
-                print(f"yay found {api} at {self.url}")
-                await WebPage.objects.acreate(
-                    title="Wordpress api",
-                    url=webpage_domain.url + f"/wp-json/wp/v2/{api}?page=1&per_page=100&orderby=modified&order=desc",
-                    domain=webpage_domain,
-                    page_type = "wordpress api",
-                    is_source=True,
-                    time_discovered=self.time_last_requested,
-                    )
+            if f"/wp/v2/{api}" in info["routes"]:
+                api_page = webpage_domain.url + f"/wp-json/wp/v2/{api}?page=1&per_page={WP_API_FIRST_PAGE_SIZE}&orderby=modified&order=desc"
+                if not await WebPage.objects.filter(domain_id=self.domain_id, url=api_page).aexists():
+                    print(f"yay found {api} at {self.url}")
+                    await WebPage.objects.acreate(
+                        title="Wordpress api",
+                        url=api_page,
+                        domain=webpage_domain,
+                        page_type = "wordpress api",
+                        is_source=True,
+                        time_discovered=self.time_last_requested,
+                        )
 
         webpage_domain.time_last_requested = self.time_last_requested
         await self.asave()
@@ -295,51 +285,24 @@ class WebPage(AbstractWebObject):
 
         print(f' - read: {self.url}')       
         pages = json.loads(text)
+
+        tasks = []
         for page in pages:
-
-            description = ""
-
-            if "excerpt" in page:
-                description = BeautifulSoup(page["excerpt"]["rendered"], "html.parser").string
-            elif "caption" in page:
-                description = BeautifulSoup(page["caption"]["rendered"], "html.parser").string
-
-            title = BeautifulSoup(page["title"]["rendered"], "html.parser").string
-            if title == None:
-                title = page["guid"]["rendered"]
-
-            time_updated = timezone.make_aware(timezone.datetime.fromisoformat(page["modified"]))
-
-            listed_page = await obtain_new_url(
-                page["guid"]["rendered"], 
-                title, 
-                description=description,
-                time_updated=time_updated,
-                time_last_requested=self.time_last_requested,
-                time_discovered=self.time_last_requested,
-                )
-                
-            if "content" in page:
-                webpage_parse = urlparse(self.url)
-                webpage_domain_str = webpage_parse.scheme + "://" + webpage_parse.hostname
-
-                anchors = BeautifulSoup(page["content"]["rendered"], "html.parser").find_all('a')
-                
-                for anchor in anchors:
-                    url = transform_anchor(anchor, webpage_domain_str)
-                    if url != False:
-                        title = anchor.string
-                        if title == None or title == "":
-                            title = url
-                        await obtain_new_url(url, title, referrer=listed_page, time_discovered=self.time_last_requested)
-
+            tasks.append(asyncio.create_task(self.wp_page_api_read_item(page)))
+        print(f"start {self.url}")
+        await asyncio.gather(*tasks)
+        print(f"end {self.url}")
 
         parsed = urlparse(self.url)
         captured_value = parse_qs(parsed.query)
 
         if len(pages) >= int(captured_value["per_page"][0]):
             increment = int(captured_value["page"][0]) + 1
-            increment_url = self.url.replace(f"?page={captured_value['page'][0]}", f"?page={increment}")
+
+            if f"&offset={WP_API_FIRST_PAGE_SIZE}" in self.url:
+                increment_url = self.url.replace(f"?page={captured_value['page'][0]}", f"?page={increment}")
+            else:
+                increment_url = self.url.replace(f"per_page={WP_API_FIRST_PAGE_SIZE}", f"per_page={WP_API_MAX_PAGE_SIZE}") + f"&offset={WP_API_FIRST_PAGE_SIZE}"
             print(f"increment? {increment_url}")
             if not await WebPage.objects.filter(domain_id=self.domain_id, url=increment_url).aexists():
                 await WebPage.objects.acreate(
@@ -353,9 +316,55 @@ class WebPage(AbstractWebObject):
 
         await self.asave()
 
+    async def wp_page_api_read_item(self, page):
+        if "media_type" in page:
+            if page["media_type"] != "file":
+                return
+
+        description = ""
+
+        if "excerpt" in page:
+            soup = BeautifulSoup(page["excerpt"]["rendered"], "html.parser")
+            description = soup.get_text()
+        elif "caption" in page:
+            description = BeautifulSoup(page["caption"]["rendered"], "html.parser").get_text()
+
+        title = BeautifulSoup(page["title"]["rendered"], "html.parser").get_text()
+        if title == None:
+            title = page["guid"]["rendered"]
+
+        time_updated = timezone.make_aware(timezone.datetime.fromisoformat(page["modified"]))
+
+        listed_page = await obtain_new_url(
+            page["link"], 
+            title, 
+            description=description,
+            time_updated=time_updated,
+            time_last_requested=self.time_last_requested,
+            time_discovered=self.time_last_requested,
+            )
+            
+        if "content" in page:
+            webpage_parse = urlparse(self.url)
+            webpage_domain_str = webpage_parse.scheme + "://" + webpage_parse.hostname
+
+            anchors = BeautifulSoup(page["content"]["rendered"], "html.parser").find_all('a')
+            
+            tasks = []
+            
+            for anchor in anchors:
+                url = transform_anchor(anchor, webpage_domain_str)
+                if url != False:
+                    title = anchor.string
+                    if title == None or title == "":
+                        title = url
+                    tasks.append(asyncio.create_task(obtain_new_url(url, title, referrer=listed_page, time_discovered=self.time_last_requested)))
+
+            await asyncio.gather(*tasks)
+
     async def scrape(self, text):
 
-        print(f' - scrape: {self.url}')
+        print(f' - start scrape: {self.url}')
         
         soup = BeautifulSoup(text, 'html.parser')
         
@@ -458,7 +467,7 @@ class WebPage(AbstractWebObject):
 
         if self.level == 0:
             webpage_domain.description = self.description
-            webpage_domain.title = self.title
+            webpage_domain.title = self.title.replace("Home - ", "").replace("Home | ", "").replace("Home Page | ", "")
             og_site_name = soup.find("meta", attrs={"property" : "og:site_name"})
 
             if og_site_name != None:
@@ -481,6 +490,8 @@ class WebPage(AbstractWebObject):
 
         await self.asave()
 
+        print(f' - end scrape: {self.url}')
+
 class ReferralManager(models.Manager):
     def create(self, **obj_data):
         if not 'source_domain' in obj_data:
@@ -492,11 +503,11 @@ class ReferralManager(models.Manager):
         return super().create(**obj_data)
 
 class Referral(models.Model):
-    source_webpage = models.ForeignKey(WebPage, related_name="source_webpage", on_delete=models.CASCADE)
-    destination_webpage = models.ForeignKey(WebPage, related_name="destination_webpage", on_delete=models.CASCADE)
+    source_webpage = models.ForeignKey(WebPage, related_name="referrs_to", on_delete=models.CASCADE)
+    destination_webpage = models.ForeignKey(WebPage, related_name="referrs_from", on_delete=models.CASCADE)
 
-    source_domain = models.ForeignKey(Domain, related_name="source_domain", on_delete=models.CASCADE)
-    destination_domain = models.ForeignKey(Domain, related_name="destination_domain", on_delete=models.CASCADE)
+    source_domain = models.ForeignKey(Domain, related_name="referrs_to", on_delete=models.CASCADE)
+    destination_domain = models.ForeignKey(Domain, related_name="referrs_from", on_delete=models.CASCADE)
 
     time_discovered = models.DateTimeField()
 
