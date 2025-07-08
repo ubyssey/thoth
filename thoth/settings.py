@@ -32,6 +32,7 @@ ALLOWED_HOSTS = []
 
 INSTALLED_APPS = [
     "webpage.apps.WebpageConfig",
+    "organize_webpages.apps.OrganizeWebpagesConfig",
 
     "django.contrib.admin",
     "django.contrib.auth",
@@ -42,6 +43,7 @@ INSTALLED_APPS = [
 
     'rest_framework',
     'django_filters',
+    'taggit',
     'corsheaders',
 ]
 

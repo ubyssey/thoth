@@ -9,6 +9,9 @@ from asgiref.sync import async_to_sync, sync_to_async
 
 from bs4 import BeautifulSoup
 import json 
+import math
+
+from organize_webpages.models import AbstractTaggableObject
 
 HEADER = {'user-agent': 'The Society of Thoth'}
 WP_API_FIRST_PAGE_SIZE = 20
@@ -60,7 +63,7 @@ def transform_anchor(anchor, webpage_domain_str):
     return url
 
 @sync_to_async
-def obtain_new_url(url, title, referrer=None, description=None, page_type="html", time_updated=None, time_last_requested=None, time_discovered=None):
+def obtain_new_url(url, title, updateTitle=True, referrer=None, description=None, page_type="html", time_updated=None, time_last_requested=None, time_discovered=None):
     #print(f'start obtain {url}')
     try:
         destination = None
@@ -87,6 +90,9 @@ def obtain_new_url(url, title, referrer=None, description=None, page_type="html"
             if description != None or time_updated != None or time_last_requested != None:
                 changes = False
 
+                if title != None and updateTitle and destination.title != title:
+                    destination.title = title
+                    changes = True
                 if description != None and destination.description != description:
                     destination.description = description
                     changes = True
@@ -126,7 +132,7 @@ def obtain_new_url(url, title, referrer=None, description=None, page_type="html"
 
 # Create your models here.
 
-class AbstractWebObject(models.Model):
+class AbstractWebObject(AbstractTaggableObject):
     url = models.URLField(max_length=510)
     title = models.CharField(max_length=255, blank=True)
     description = models.TextField(blank=True, null=True)
@@ -220,54 +226,76 @@ class WebPage(AbstractWebObject):
                 await self.asave()
                 print(f"fixed {self.url}")
 
-        try:
-            async with aiohttp.ClientSession(headers=HEADER, max_line_size=8190 * 2, max_field_size=8190 * 2) as session:
-                async with session.get(self.url) as r:
-                    requested_page = None
-                    text = await r.text()
-                    url = str(r.url)
+        #try:
+        async with aiohttp.ClientSession(headers=HEADER, max_line_size=8190 * 2, max_field_size=8190 * 2) as session:
+            async with session.get(self.url) as r:
+                requested_page = None
+                text = await r.text()
+                url = str(r.url)
 
-                    if url == self.url:
-                        requested_page = self
+                if url == self.url:
+                    requested_page = self
+                else:
+                    self.is_redirect = True
+                    await self.asave()
+                    if self.level==0:
+                        domain = await Domain.objects.aget(id=self.domain_id)
+                        if not domain.url in url: 
+                            domain.is_redirect = True
+                            await domain.asave()
+
+                    redirect_webpage = await obtain_new_url(url, title=self.title, page_type=self.page_type, time_discovered=self.time_discovered)
+                    if redirect_webpage != None:
+                        requested_page = redirect_webpage
+
+                if requested_page != None:
+                    if requested_page.page_type == "wordpress api":
+                        await requested_page.wp_page_api(text)
+                    elif requested_page.page_type == "wordpress api index":
+                        await requested_page.wp_page_api_index(text)
+                    elif requested_page.page_type == "html":
+                        await requested_page.scrape(text)
                     else:
-                        self.is_redirect = True
-                        await self.asave()
-                        if self.level==0:
-                            domain = await Domain.objects.aget(id=self.domain_id)
-                            if not domain.url in url: 
-                                domain.is_redirect = True
-                                await domain.asave()
-
-                        redirect_webpage = await sync_to_async(obtain_new_url)(url, title=self.title, page_type=self.page_type, time_discovered=self.time_discovered)
-                        if redirect_webpage != None:
-                            requested_page = redirect_webpage
-
-                    if requested_page != None:
-                        if requested_page.page_type == "wordpress api":
-                            await requested_page.wp_page_api(text)
-                        elif requested_page.page_type == "wordpress api index":
-                            await requested_page.wp_page_api_index(text)
-                        elif requested_page.page_type == "html":
-                            await requested_page.scrape(text)
-                        else:
-                            print(f"oops {self.url}")
-                        
-        except Exception as e: 
-            print(f"error: {self.url}, {e}")
+                        print(f"oops {self.url}")
+                    
+        #except Exception as e: 
+        #    print(f"error: {self.url}, {e}")
 
     async def wp_page_api_index(self, text):
         print(f' - read: {self.url}')
 
         info = json.loads(text)
+
+        if type(info) == dict:
+            if "code" in info:
+                if info["code"] == "rest_post_invalid_page_number":
+
+                    parsed = urlparse(self.url)
+                    captured_value = parse_qs(parsed.query)
+
+                    page = int(captured_value["page"][0])
+                    per_page = math.floor(int(captured_value["per_page"][0]) * 0.75)
+                    orderby = int(captured_value["orderby"][0])
+                    order = int(captured_value["order"][0])
+
+                    print(f"page size too high {self.url}")
+                    self.url = self.url.split("?")[0] + f'?page={page}&per_page={per_page}&orderby={orderby}&order={order}'
+
+                    await self.asave()
+                    print(f"new page size {self.url}")
+
+                    return
+
         webpage_domain = await Domain.objects.aget(id=self.domain_id)
         self.time_last_requested = timezone.now()
 
-        for api in ["pages", "posts", "media", "tribe_events"]:
+        @sync_to_async
+        def add_wp_api_page(api):
             if f"/wp/v2/{api}" in info["routes"]:
                 api_page = webpage_domain.url + f"/wp-json/wp/v2/{api}?page=1&per_page={WP_API_FIRST_PAGE_SIZE}&orderby=modified&order=desc"
-                if not await WebPage.objects.filter(domain_id=self.domain_id, url=api_page).aexists():
+                if not WebPage.objects.filter(domain_id=self.domain_id, url=api_page).exists():
                     print(f"yay found {api} at {self.url}")
-                    await WebPage.objects.acreate(
+                    WebPage.objects.create(
                         title="Wordpress api",
                         url=api_page,
                         domain=webpage_domain,
@@ -275,6 +303,9 @@ class WebPage(AbstractWebObject):
                         is_source=True,
                         time_discovered=self.time_last_requested,
                         )
+                    
+        for api in ["pages", "posts", "media", "tribe_events"]:
+            await add_wp_api_page(api)
 
         webpage_domain.time_last_requested = self.time_last_requested
         await self.asave()
@@ -358,7 +389,7 @@ class WebPage(AbstractWebObject):
                     title = anchor.string
                     if title == None or title == "":
                         title = url
-                    tasks.append(asyncio.create_task(obtain_new_url(url, title, referrer=listed_page, time_discovered=self.time_last_requested)))
+                    tasks.append(asyncio.create_task(obtain_new_url(url, title, updateTitle=False, referrer=listed_page, time_discovered=self.time_last_requested)))
 
             await asyncio.gather(*tasks)
 
@@ -401,7 +432,7 @@ class WebPage(AbstractWebObject):
         url_to_name = {}
         def transformLink(anchor):
             url = transform_anchor(anchor, webpage_domain_str)
-            if url == False:
+            if url == False or url==self.url:
                 return False
                 
             if not url in url_to_name:
@@ -431,7 +462,7 @@ class WebPage(AbstractWebObject):
                 title = link_parse.path
                 print(title)
 
-            obtained_webpage = await obtain_new_url(link, title, referrer=self, time_discovered=discover_time)
+            obtained_webpage = await obtain_new_url(link, title, updateTitle=False, referrer=self, time_discovered=discover_time)
             if obtained_webpage != None:
                 new_link = new_link and obtained_webpage.time_discovered==discover_time
 
@@ -473,18 +504,21 @@ class WebPage(AbstractWebObject):
             if og_site_name != None:
                 webpage_domain.title = og_site_name.get("content")
 
-            if "/wp-json/wp/v2/" in text:
-                if not await WebPage.objects.filter(domain=webpage_domain, page_type="wordpress api index").aexists():
-                    print(f"created index page {webpage_domain.url + '/wp-json/wp/v2/'}")
-                    await WebPage.objects.acreate(
-                        title="Wordpress api index page",
-                        url=webpage_domain.url + "/wp-json/wp/v2/",
-                        domain=webpage_domain,
-                        page_type = "wordpress api index",
-                        is_source=False,
-                        time_discovered=self.time_last_requested,
-                        )
-                    
+            @sync_to_async
+            def add_wp_index_page():
+                if "/wp-json/wp/v2/" in text:
+                    if not WebPage.objects.filter(domain=webpage_domain, page_type="wordpress api index").exists():
+                        print(f"created index page {webpage_domain.url + '/wp-json/wp/v2/'}")
+                        WebPage.objects.create(
+                            title="Wordpress api index page",
+                            url=webpage_domain.url + "/wp-json/wp/v2/",
+                            domain=webpage_domain,
+                            page_type = "wordpress api index",
+                            is_source=False,
+                            time_discovered=self.time_last_requested,
+                            )
+            
+            await add_wp_index_page()
 
         await webpage_domain.asave()
 

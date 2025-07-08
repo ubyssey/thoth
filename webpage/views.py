@@ -70,8 +70,9 @@ class WebPageSerializer(serializers.HyperlinkedModelSerializer):
 # ViewSets define the view behavior.
 class WebPageViewSet(viewsets.ModelViewSet):
     queryset = WebPage.objects.filter(is_redirect=False, domain__is_redirect=False).order_by(F("time_updated").desc(nulls_last=True), F("time_last_requested").desc(nulls_last=True))
-    filter_backends = [django_filters.rest_framework.DjangoFilterBackend]
+    filter_backends = [django_filters.rest_framework.DjangoFilterBackend, filters.SearchFilter]
     filterset_fields = ['id', 'url', 'domain_id']
+    search_fields = ["url", "title", "description"]
     serializer_class = WebPageSerializer
 
 # Serializers define the API representation.

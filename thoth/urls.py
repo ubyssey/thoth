@@ -23,12 +23,14 @@ from rest_framework import routers
 
 import thoth.views as views
 from webpage.views import WebPageViewSet, DomainViewSet
+from organize_webpages.views import ThothTagViewSet
 
 
 # Routers provide an easy way of automatically determining the URL conf.
 router = routers.DefaultRouter()
 router.register(r'webpages', WebPageViewSet)
 router.register(r'domains', DomainViewSet)
+router.register(r'tags', ThothTagViewSet)
 
 urlpatterns = [
     path("webpage/", include("webpage.urls")),
