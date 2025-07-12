@@ -155,7 +155,7 @@ class Command(BaseCommand):
                 bag = {}
                 for word in words_set:
                     domain_count = sum([1 if word in domain_word else 0 for domain_word in words_by_domain])
-                    if domain_count > 1:
+                    if domain_count > 1 or len(cluster) == 1:
                         bag[word] = words.count(word)
                     
                 return bag
@@ -267,7 +267,7 @@ class Command(BaseCommand):
                         if len(cluster) == 1:
                             is_direct = True
 
-                        if not is_direct:
+                        if not is_direct and prev_names[i][c] != names[i]:
                             print(f' - {prev_names[i][c]}')
                             if ThothTag.objects.filter(name=prev_names[i][c]).exists():
                                 ThothTag.objects.get(name=prev_names[i][c]).parents.add(new_tag)

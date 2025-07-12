@@ -37,6 +37,7 @@ urlpatterns = [
     path("admin/", admin.site.urls),
 
     path("domain/<int:domain_id>/", views.domain, name="domain"), 
+    path("answer/", views.answer_query),
     path("", views.index, name="index"),   
     path('api-auth/', include('rest_framework.urls')),
     path("api/", include(router.urls)),

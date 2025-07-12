@@ -20,7 +20,7 @@ class ThothTaggedItem(GenericTaggedItemBase):
     is_direct = models.BooleanField(default=True)
 
 class AbstractTaggableObject(models.Model):
-    tags = TaggableManager(through=ThothTaggedItem)
+    tags = TaggableManager(through=ThothTaggedItem, blank=True)
     
     class Meta():
         abstract = True
