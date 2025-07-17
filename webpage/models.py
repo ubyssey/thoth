@@ -97,6 +97,9 @@ async def obtain_new_url(url, title, updateTitle=True, referrer=None, descriptio
     await create_if_not_existing()
     destination = await WebPage.objects.aget(url=url)
 
+    if not await destination.embeddings.filter(source_attribute="title").aexists():
+        await Embeddings.objects.aencode(string=destination.title, webpage=destination, source_attribute="title")
+
     tasks = []
 
     attributes = [description, time_updated, time_last_requested]
@@ -205,10 +208,10 @@ class Domain(AbstractWebObject):
         
         tasks = []
         if await crawlpage_query.aexists():
-            tasks = tasks + [wp.hit() async for wp in crawlpage_query.order_by('level', 'time_last_requested', '-time_updated')]
+            tasks = tasks + [asyncio.create_task(wp.hit()) async for wp in crawlpage_query.order_by('level', 'time_last_requested', '-time_updated')]
 
         if await hit_query.aexists():
-            tasks = tasks + [wp.hit() async for wp in hit_query.order_by('level', 'time_last_requested', '-time_updated')[:HIT_COUNT]]
+            tasks = tasks + [asyncio.create_task(wp.hit()) async for wp in hit_query.order_by('level', 'time_last_requested', '-time_updated')[:HIT_COUNT]]
 
         return tasks
     
@@ -281,9 +284,12 @@ class WebPage(AbstractWebObject):
                             await requested_page.scrape(text)
                         else:
                             print(f"oops {self.url}")
+
+                    return requested_page
                         
         except Exception as e: 
             print(f"error: {self.url}, {e}")
+            return None
 
     async def wp_page_api_index(self, text):
         print(f' - read: {self.url}')
@@ -637,15 +643,36 @@ class Referral(models.Model):
 
     objects = ReferralManager()
 
-'''
+
+
 class EmbeddingsManager(models.Manager):
-    def create():
-        model = SentenceTransformer("paraphrase-MiniLM-L3-v2")
+    embeddings_model = SentenceTransformer("paraphrase-MiniLM-L3-v2")
+
+    def encode(self, string, webpage, source_attribute):
+        start_time = timezone.now()
+        
+        embedding = self.embeddings_model.encode(string)
+        
+        print(f' - EMBEDDING ({source_attribute}) ({timezone.now() - start_time})\n    - {webpage.url}')
+
+        obj_data = {
+            "embedding": embedding,
+            "webpage": webpage,
+            "domain": webpage.domain,
+            "source_attribute": source_attribute
+        }
+
+        return super().create(**obj_data)
+    
+    async def aencode(self, string, webpage, source_attribute):
+        return await sync_to_async(self.encode)(string, webpage, source_attribute)
+
 
 class Embeddings(models.Model):
-    embedding = VectorField(dimensions=12)
+    objects = EmbeddingsManager()
 
-    webpage = models.ForeignKey(WebPage)
-    domain = models.ForeignKey(Domain)
+    embedding = VectorField(dimensions=384)
+
+    webpage = models.ForeignKey(WebPage, related_name="embeddings", on_delete=models.CASCADE)
+    domain = models.ForeignKey(Domain, related_name="embeddings", on_delete=models.CASCADE)
     source_attribute = models.CharField()
-'''

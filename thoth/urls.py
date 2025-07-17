@@ -23,14 +23,15 @@ from rest_framework import routers
 
 import thoth.views as views
 from webpage.views import WebPageViewSet, DomainViewSet
-from organize_webpages.views import ThothTagViewSet
-
+from organize_webpages.views import ThothTagViewSet, ThothTagNestedViewSet, add_domain
+from users.views import user_login, GetUser
 
 # Routers provide an easy way of automatically determining the URL conf.
 router = routers.DefaultRouter()
-router.register(r'webpages', WebPageViewSet)
-router.register(r'domains', DomainViewSet)
+router.register(r'webpages', WebPageViewSet, "Webpage")
+router.register(r'domains', DomainViewSet, "Domain")
 router.register(r'tags', ThothTagViewSet)
+router.register(r'tags-nested', ThothTagNestedViewSet, 'tags full')
 
 urlpatterns = [
     path("webpage/", include("webpage.urls")),
@@ -40,5 +41,8 @@ urlpatterns = [
     path("answer/", views.answer_query),
     path("", views.index, name="index"),   
     path('api-auth/', include('rest_framework.urls')),
+    path("api/tags/add-domain/", add_domain),
     path("api/", include(router.urls)),
+    path("login/", user_login),
+    path("authed-user/", GetUser.as_view()),
 ]

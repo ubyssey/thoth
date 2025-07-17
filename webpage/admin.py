@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import WebPage, Domain, Referral
+from .models import WebPage, Domain, Referral, Embeddings
 # Register your models here.
 
 class WebPageAdmin(admin.ModelAdmin):
@@ -14,8 +14,15 @@ class ReferralAdmin(admin.ModelAdmin):
     search_fields = ['source_webpage__url', 'destination_webpage__url']
     list_display = ("source_webpage", "destination_webpage")
 
+class EmbeddingsAdmin(admin.ModelAdmin):
+    search_fields = ['webpage__url', 'source_attribute']
+    list_display = ('webpage', 'source_attribute')
+    
+
 admin.site.register(WebPage, WebPageAdmin)
 
 admin.site.register(Domain, DomainAdmin)
 
 admin.site.register(Referral, ReferralAdmin)
+
+admin.site.register(Embeddings, EmbeddingsAdmin)

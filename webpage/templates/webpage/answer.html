@@ -1,16 +1,23 @@
-<div class="query">
-    <h1>{{title}}</h1>
-    <h2>{{query}}</h2>
+<h1>{{query}}</h1>
+
+{% for answer in answers %}
+<div class="answer">
+    <h2><a href="{{answer.url}}">{{answer.title}}</a></h2>
+    {% for answer_segment in answer.answer %}
     <p>
-        {{answer}}
+        {{answer_segment}}
     </p>
+    {% endfor %}
 </div>
+{% endfor %}
 
 <style>
-.query {
+h1 {
+    text-align: center;
+}
+.answer {
     max-width: 800px;
-    padding: 1em;
-    margin: 1em auto;
+    margin: 3em auto;
     font-family: sans-serif;
 }
 p {
