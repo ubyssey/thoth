@@ -2,9 +2,11 @@ FROM  python:3.11.12-bullseye
 
 ENV PYTHONUNBUFFERED=1
 
-COPY . /workspaces/thoth.ubyssey.ca/
+RUN apt-get update && apt-get -y install cron
 
-WORKDIR /workspaces/thoth.ubyssey.ca/
+COPY . /workspaces/backend/
+
+WORKDIR /workspaces/backend/
 
 RUN pip install -r requirements.txt
 
