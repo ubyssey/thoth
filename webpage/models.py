@@ -14,6 +14,7 @@ from bs4 import BeautifulSoup
 import json 
 import math
 
+from thoth.settings import SIMILARITY_MODEL
 from organize_webpages.models import AbstractTaggableObject
 
 HEADER = {'user-agent': 'The Society of Thoth'}
@@ -26,10 +27,13 @@ def crawl_worthy(url):
 def get_link_domain(link):
     link_parse = urlparse(link)
     link_domain_str = link_parse.scheme + "://" + link_parse.hostname
+    safe_domain = link_domain_str.replace("http://", "https://")
 
     if Domain.objects.filter(url=link_domain_str).exists():
         return Domain.objects.get(url=link_domain_str)
-    else:
+    elif Domain.objects.filter(url=safe_domain).exists():
+        return Domain.objects.get(url=safe_domain)
+    else: 
         return Domain.objects.create(
             url=link_domain_str,
             title=link_domain_str,
@@ -67,91 +71,102 @@ def transform_anchor(anchor, webpage_domain_str):
 
 async def obtain_new_url(url, title, updateTitle=True, referrer=None, description=None, image=None, page_type="html", time_updated=None, time_last_requested=None, time_discovered=None):
     #print(f'start obtain {url}')
-    #try:
-    destination = None
+    try:
+        destination = None
 
-    if len(url) > 510:
+        if len(url) > 510:
+            return None
+
+        is_crawl_worthy = crawl_worthy(url)
+        if referrer != None:
+            is_crawl_worthy = is_crawl_worthy or crawl_worthy(referrer.url)
+
+        if not is_crawl_worthy:
+            return None
+
+        @sync_to_async
+        def create_if_not_existing(url):
+            if not WebPage.objects.filter(url=url).exists():
+                if WebPage.objects.filter(url=url.replace("http://", "https://")).exists():
+                    url = url.replace("http://", "https://")
+                    print(f' secure {url}')
+                else:
+                    destination = WebPage.objects.create(
+                        url=url,
+                        title=title,
+                        description=description,
+                        image=image,
+                        time_updated=time_updated,
+                        time_last_requested=time_last_requested,
+                        time_discovered=time_discovered,
+                        page_type=page_type
+                        )
+
+                    if not destination.embeddings.filter(source_attribute="title").exists():
+                        Embeddings.objects.encode(string=destination.title, webpage=destination, source_attribute="title")
+
+                    return destination
+
+            return WebPage.objects.get(url=url)
+
+        destination = await create_if_not_existing(url)
+
+        tasks = []
+
+        attributes = [description, time_updated, time_last_requested]
+        if len(list(filter(lambda attribute: attribute!=None, attributes))) > 0:
+            changes = False
+
+            if title != None and updateTitle and destination.title != title:
+                destination.title = title
+
+                if not await destination.embeddings.filter(source_attribute="title").aexists():
+                    await Embeddings.objects.aencode(string=destination.title, webpage=destination, source_attribute="title")
+
+                changes = True
+            if description != None and destination.description != description:
+                destination.description = description
+                changes = True
+            if time_updated != None and destination.time_updated != time_updated:
+                destination.time_updated = time_updated
+                changes = True
+            if time_last_requested != None and destination.time_last_requested != time_last_requested:
+                destination.time_last_requested = time_last_requested
+                changes = True
+            if image != None and destination.image != image:
+                destination.image = image
+                changes = True                    
+            if changes:
+                tasks.append(asyncio.create_task(destination.asave()))
+
+        '''
+        if destination != None and time_updated != None:
+            destination_domain = destination.domain
+            if destination_domain.time_updated == None:
+                destination_domain.time_updated = time_updated
+                tasks.append(destination_domain.asave())
+            elif time_updated > destination_domain.time_updated:
+                destination_domain.time_updated = time_updated
+                tasks.append(destination_domain.asave())
+        '''
+
+        if destination != None and referrer != None:
+            if not await Referral.objects.filter(source_webpage=referrer, destination_webpage=destination).aexists():
+                tasks.append(asyncio.create_task(Referral.objects.acreate(
+                    source_webpage = referrer,
+                    destination_webpage = destination
+                    )))
+                
+        await asyncio.gather(*tasks)
+
+        #print(f'obtained {url}')
+        return destination
+    except Exception as e: 
+        if referrer != None:
+            print(f"error: {url} from {referrer.url}, {e}")            
+        else:
+            print(f"error: {url}, {e}")
         return None
-
-    is_crawl_worthy = crawl_worthy(url)
-    if referrer != None:
-        is_crawl_worthy = is_crawl_worthy or crawl_worthy(referrer.url)
-
-    if not is_crawl_worthy:
-        return None
-
-    @sync_to_async
-    def create_if_not_existing():
-        if not WebPage.objects.filter(url=url).exists():
-                WebPage.objects.create(
-                    url=url,
-                    title=title,
-                    description=description,
-                    image=image,
-                    time_updated=time_updated,
-                    time_last_requested=time_last_requested,
-                    time_discovered=time_discovered,
-                    page_type=page_type
-                    )
-
-    await create_if_not_existing()
-    destination = await WebPage.objects.aget(url=url)
-
-    if not await destination.embeddings.filter(source_attribute="title").aexists():
-        await Embeddings.objects.aencode(string=destination.title, webpage=destination, source_attribute="title")
-
-    tasks = []
-
-    attributes = [description, time_updated, time_last_requested]
-    if len(list(filter(lambda attribute: attribute!=None, attributes))) > 0:
-        changes = False
-
-        if title != None and updateTitle and destination.title != title:
-            destination.title = title
-            changes = True
-        if description != None and destination.description != description:
-            destination.description = description
-            changes = True
-        if time_updated != None and destination.time_updated != time_updated:
-            destination.time_updated = time_updated
-            changes = True
-        if time_last_requested != None and destination.time_last_requested != time_last_requested:
-            destination.time_last_requested = time_last_requested
-            changes = True
-        if image != None and destination.image != image:
-            destination.image = image
-            changes = True                    
-        if changes:
-            tasks.append(asyncio.create_task(destination.asave()))
-
-    '''
-    if destination != None and time_updated != None:
-        destination_domain = destination.domain
-        if destination_domain.time_updated == None:
-            destination_domain.time_updated = time_updated
-            tasks.append(destination_domain.asave())
-        elif time_updated > destination_domain.time_updated:
-            destination_domain.time_updated = time_updated
-            tasks.append(destination_domain.asave())
-    '''
-
-    if destination != None and referrer != None:
-        if not await Referral.objects.filter(source_webpage=referrer, destination_webpage=destination).aexists():
-            tasks.append(asyncio.create_task(Referral.objects.acreate(
-                source_webpage = referrer,
-                destination_webpage = destination
-                )))
-            
-    await asyncio.gather(*tasks)
-
-    #print(f'obtained {url}')
-    return destination
-    #except Exception as e: 
-    #    if referrer != None:
-    #        print(f"error: {url} from {referrer.url}, {e}")            
-    #    else:
-    #        print(f"error: {url}, {e}")
-    #    return None
 
 # Create your models here.
 
@@ -223,6 +238,9 @@ class WebPageManager(models.Manager):
             obj_data['time_discovered'] = timezone.now()
         if not 'level' in obj_data:
             obj_data['level'] = get_link_level(obj_data['url'])
+
+        if "https://" in obj_data['domain'].url and not "https://" in obj_data['url']:
+            obj_data['url'] = obj_data['url'].replace("http://", "https://")
         
         return super().create(**obj_data)
 
@@ -239,59 +257,85 @@ class WebPage(AbstractWebObject):
         if not "http" in self.url:
             await self.adelete()
             return
-        '''
-        impostors = WebPage.objects.filter(domain_id=self.domain_id, url=self.url).exclude(id=self.id)
-        if await impostors.aexists():
-            async for impostor in impostors:
-                print(f' delete: {impostor.url}')
-                await impostor.adelete()
-        '''
-        if self.page_type == "wordpress api":
-            if "?page=1&per_page=" in self.url and not f"?page=1&per_page={WP_API_FIRST_PAGE_SIZE}" in self.url and not f"&offset={WP_API_FIRST_PAGE_SIZE}" in self.url:
-                self.url = self.url.split("?page=1")[0] + f"?page=1&per_page={WP_API_FIRST_PAGE_SIZE}&orderby=modified&order=desc"
-                await self.asave()
-                print(f"fixed {self.url}")
 
-        try:
-            async with aiohttp.ClientSession(headers=HEADER, max_line_size=8190 * 2, max_field_size=8190 * 2) as session:
-                async with session.get(self.url) as r:
-                    print(f' - HITTED ({timezone.now() - hit_time})\n    - {self.url}')
-                    requested_page = None
-                    text = await r.text()
-                    url = str(r.url)
+        #try:
+        async with aiohttp.ClientSession(headers=HEADER, max_line_size=8190 * 2, max_field_size=8190 * 2) as session:
+            async with session.get(self.url) as r:
+                print(f' - HITTED ({timezone.now() - hit_time})\n    - {self.url}')
+                requested_page = None
+                text = await r.text()
+                url = str(r.url)
 
-                    if url == self.url:
-                        requested_page = self
+                if url == self.url:
+                    requested_page = self
+                else:
+                    self.is_redirect = True
+                    await self.asave()
+                    if self.level==0:
+                        domain = await Domain.objects.aget(id=self.domain_id)
+                        if not domain.url in url: 
+                            domain.is_redirect = True
+                            await domain.asave()
+
+                    redirect_webpage = await obtain_new_url(url, title=self.title, page_type=self.page_type, time_discovered=self.time_discovered)
+                    if redirect_webpage != None:
+                        requested_page = redirect_webpage
+
+                if requested_page != None:
+                    if requested_page.page_type == "wordpress api":
+                        await requested_page.wp_page_api(text)
+                    elif requested_page.page_type == "wordpress api index":
+                        await requested_page.wp_page_api_index(text)
+                    elif requested_page.page_type == "html":
+                        await requested_page.scrape(text)
                     else:
-                        self.is_redirect = True
-                        await self.asave()
-                        if self.level==0:
-                            domain = await Domain.objects.aget(id=self.domain_id)
-                            if not domain.url in url: 
-                                domain.is_redirect = True
-                                await domain.asave()
+                        print(f"oops {self.url}")
 
-                        redirect_webpage = await obtain_new_url(url, title=self.title, page_type=self.page_type, time_discovered=self.time_discovered)
-                        if redirect_webpage != None:
-                            requested_page = redirect_webpage
+                return requested_page
+                    
+        #except Exception as e: 
+        #    print(f"error: {self.url}, {e}")
+        #    return None
 
-                    if requested_page != None:
-                        if requested_page.page_type == "wordpress api":
-                            await requested_page.wp_page_api(text)
-                        elif requested_page.page_type == "wordpress api index":
-                            await requested_page.wp_page_api_index(text)
-                        elif requested_page.page_type == "html":
-                            await requested_page.scrape(text)
-                        else:
-                            print(f"oops {self.url}")
+    async def wp_page_api_test(self, wp_api_a, wp_api_b):
+        # Wordpress api can be messed up sometimes.
+        # This allows us to test that the parameters we are using are all fine in combination
+        # Do not save api requests with untested parameter combinations 
 
-                    return requested_page
-                        
-        except Exception as e: 
-            print(f"error: {self.url}, {e}")
-            return None
+        async def async_web_request(url):
+            async with aiohttp.ClientSession(headers=HEADER, max_line_size=8190 * 2, max_field_size=8190 * 2) as session:
+                async with session.get(url) as r:
+                    return json.loads(await r.text())
+
+        a, b = await asyncio.gather(async_web_request(wp_api_a), async_web_request(wp_api_b))
+
+        if type(a) == list and type(b) == list:
+            if a[0] != b[0]:
+                return 0
+            else:
+                print("not paging correctly")
+                return 1
+        else:
+            if type(a) == type(b):
+                print("error with api")
+                print(a)
+                print(b)
+                return 2
+
+            elif type(a) != list:
+                print("error on first page")
+                print(a)
+
+                return 3
+
+            else:
+                print("error on second page")
+                print(b)
+                return 4
 
     async def wp_page_api_index(self, text):
+        API_ROUTES = ["pages", "posts", "media", "tribe_events"]
+
         print(f' - read: {self.url}')
 
         info = json.loads(text)
@@ -299,10 +343,21 @@ class WebPage(AbstractWebObject):
         webpage_domain = await Domain.objects.aget(id=self.domain_id)
         self.time_last_requested = timezone.now()
 
+        possible_api_routes = [
+            lambda api, i, pp: webpage_domain.url + f"/wp-json/wp/v2/{api}?page={i}&per_page={pp}&orderby=modified&order=desc",
+            lambda api, i, pp: webpage_domain.url + f"/wp-json/wp/v2/{api}?offset={(i-1)*pp}&per_page={pp}&orderby=modified&order=desc",
+            lambda api, i, pp: webpage_domain.url + f"/wp-json/wp/v2/{api}?page={i}&per_page={pp}&order=desc",
+            lambda api, i, pp: webpage_domain.url + f"/wp-json/wp/v2/{api}?offset={(i-1)*pp}&per_page={pp}&order=desc",
+            lambda api, i, pp: webpage_domain.url + f"/wp-json/wp/v2/{api}?page={i}&per_page={pp}&orderby=modified",
+            lambda api, i, pp: webpage_domain.url + f"/wp-json/wp/v2/{api}?offset={(i-1)*pp}&per_page={pp}&orderby=modified",
+            lambda api, i, pp: webpage_domain.url + f"/wp-json/wp/v2/{api}?page={i}&per_page={pp}",
+            lambda api, i, pp: webpage_domain.url + f"/wp-json/wp/v2/{api}?offset={(i-1)*pp}&per_page={pp}",
+        ]
+
         @sync_to_async
-        def add_wp_api_page(api):
+        def add_wp_api_page(api, pa):
             if f"/wp/v2/{api}" in info["routes"]:
-                api_page = webpage_domain.url + f"/wp-json/wp/v2/{api}?page=1&per_page={WP_API_FIRST_PAGE_SIZE}&orderby=modified&order=desc"
+                api_page = possible_api_routes[pa](api, 1, WP_API_FIRST_PAGE_SIZE)
                 if not WebPage.objects.filter(domain_id=self.domain_id, url=api_page).exists():
                     print(f" - {self.url} wp api found {api}")
                     WebPage.objects.create(
@@ -313,13 +368,50 @@ class WebPage(AbstractWebObject):
                         is_source=True,
                         time_discovered=self.time_last_requested,
                         )
+
+        pa = 0
+        for api in API_ROUTES:
+            if f"/wp/v2/{api}" in info["routes"]:
+                print(f'testing with {api}')
+
+                a = 1
+                b = 2
+
+                while True:
+                    if pa > len(possible_api_routes):
+                        pa = 0
+                        print(f'exhuasted possibilities')
+                        break
+
+                    #try:
+                    test_result = await self.wp_page_api_test(possible_api_routes[pa](api, a, 1), possible_api_routes[pa](api, b, 1))
+
+                    if test_result == 0:
+                        print(f"suceeded with {possible_api_routes[pa](api, a, 1)} {possible_api_routes[pa](api, b, 1)}")
+                        break
+                    elif test_result == 1:
+                        pa = pa + 1
+                    elif test_result == 2:
+                        pa = pa + 1
+                    elif test_result == 3:
+                        a = b
+                        b = b + 1
+                    elif test_result == 4:
+                        b = b + 1
                     
-        for api in ["pages", "posts", "media", "tribe_events"]:
-            await add_wp_api_page(api)
+                    #except:
+                    #    print(f"error requesting {possible_api_routes[pa](api, a, 1)} {possible_api_routes[pa](api, b, 1)}")
+                    #    pa = 0
+                    #    break
+                break
+
+        for api in API_ROUTES:
+            await add_wp_api_page(api, pa)
 
         webpage_domain.time_last_requested = self.time_last_requested
         await self.asave()
         await webpage_domain.asave()
+
 
     async def wp_page_api(self, text):
         self.time_last_requested = timezone.now()
@@ -346,6 +438,7 @@ class WebPage(AbstractWebObject):
                         print(f"new page size {self.url}")
 
                 elif info["code"] == "rest_post_invalid_page_number":
+                    print(f"delete {self.url}")
                     await self.adelete()
 
                 return
@@ -364,29 +457,41 @@ class WebPage(AbstractWebObject):
         captured_value = parse_qs(parsed.query)
 
         if len(pages) >= int(captured_value["per_page"][0]):
-            increment = int(captured_value["page"][0]) + 1
 
-            if f"&offset={WP_API_FIRST_PAGE_SIZE}" in self.url:
-                increment_url = self.url.replace(f"?page={captured_value['page'][0]}", f"?page={increment}")
+            increment = None
+            increment_url = None
+
+            if int(captured_value['per_page'][0]) > WP_API_FIRST_PAGE_SIZE:
+                if "page" in captured_value:                
+                    increment = int(captured_value["page"][0]) + 1
+                    increment_url = self.url.replace(f"?page={captured_value['page'][0]}", f"?page={increment}")
+                elif "offset" in captured_value:
+                    increment = int(captured_value["offset"][0]) + int(captured_value["per_page"][0])
+                    increment_url = self.url.replace(f"?offset={captured_value['offset'][0]}", f"?offset={increment}")
+
             else:
-                increment_url = self.url.replace(f"per_page={WP_API_FIRST_PAGE_SIZE}", f"per_page={WP_API_MAX_PAGE_SIZE}") + f"&offset={WP_API_FIRST_PAGE_SIZE}"
-            print(f"increment? {increment_url}")
-            if not await WebPage.objects.filter(domain_id=self.domain_id, url=increment_url).aexists():
-                await WebPage.objects.acreate(
-                    title=f"Wordpress api {increment}",
-                    url=increment_url,
-                    domain_id=self.domain_id,
-                    page_type = "wordpress api",
-                    is_source=False,
-                    time_discovered=self.time_last_requested
-                    )
+                increment_url = self.url.replace(f"per_page={WP_API_FIRST_PAGE_SIZE}", f"per_page={WP_API_MAX_PAGE_SIZE}")
+            
+            if increment_url != None:
+                print(f"increment? {increment_url}")
+                if not await WebPage.objects.filter(domain_id=self.domain_id, url=increment_url).aexists():
+                    await WebPage.objects.acreate(
+                        title=f"Wordpress api {increment}",
+                        url=increment_url,
+                        domain_id=self.domain_id,
+                        page_type = "wordpress api",
+                        is_source=False,
+                        time_discovered=self.time_last_requested
+                        )
 
         await self.asave()
 
     async def wp_page_api_read_item(self, page):
         if "media_type" in page:
-            if page["media_type"] != "file":
+            if not page["media_type"] in ["file", "application", "video", "audio"]:
                 return
+            else:
+                print(f'whoa {page["link"]} {page["media_type"]}')
 
         description = ""
 
@@ -646,12 +751,11 @@ class Referral(models.Model):
 
 
 class EmbeddingsManager(models.Manager):
-    embeddings_model = SentenceTransformer("paraphrase-MiniLM-L3-v2")
 
     def encode(self, string, webpage, source_attribute):
         start_time = timezone.now()
         
-        embedding = self.embeddings_model.encode(string)
+        embedding = SIMILARITY_MODEL.encode(string)
         
         print(f' - EMBEDDING ({source_attribute}) ({timezone.now() - start_time})\n    - {webpage.url}')
 

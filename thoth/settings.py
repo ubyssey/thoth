@@ -11,6 +11,8 @@ https://docs.djangoproject.com/en/4.2/ref/settings/
 """
 
 from pathlib import Path
+from sentence_transformers import SentenceTransformer
+
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -46,6 +48,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'rest_framework.authtoken',
     'django_filters',
+    'django_crontab',
     'taggit',
     'corsheaders',
 ]
@@ -168,3 +171,15 @@ CSRF_TRUSTED_ORIGINS = [
 CORS_ALLOW_ALL_ORIGINS = True
 
 ALLOWED_HOSTS = ["backend", "localhost"]
+
+CRONJOBS = [
+    ('*/5 * * * *', 'webpage.views.scrape_all')
+]
+
+#start = timezone.now()
+QUESTION_ANSWER_MODEL = SentenceTransformer("msmarco-distilbert-dot-v5")
+#print(f'download question answer model {timezone.now() - start}')
+
+#start = timezone.now()
+SIMILARITY_MODEL = SentenceTransformer("paraphrase-MiniLM-L3-v2")
+#print(f'download similarity model {timezone.now() - start}')

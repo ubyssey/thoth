@@ -22,7 +22,7 @@ import rest_framework
 from rest_framework import routers
 
 import thoth.views as views
-from webpage.views import WebPageViewSet, DomainViewSet
+from webpage.views import WebPageViewSet, DomainViewSet, answer
 from organize_webpages.views import ThothTagViewSet, ThothTagNestedViewSet, add_domain
 from users.views import user_login, GetUser
 
@@ -38,10 +38,10 @@ urlpatterns = [
     path("admin/", admin.site.urls),
 
     path("domain/<int:domain_id>/", views.domain, name="domain"), 
-    path("answer/", views.answer_query),
     path("", views.index, name="index"),   
     path('api-auth/', include('rest_framework.urls')),
     path("api/tags/add-domain/", add_domain),
+    path("api/answer/", answer),
     path("api/", include(router.urls)),
     path("login/", user_login),
     path("authed-user/", GetUser.as_view()),
