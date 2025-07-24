@@ -60,9 +60,9 @@ async def scrape_all():
         wps = await domain.get_webpage_to_hit()
         tasks = tasks + wps
 
-        if len(tasks) > MAX_TASKS:
-            await asyncio.gather(*tasks)
-            tasks = []
+        #if len(tasks) > MAX_TASKS:
+        #    await asyncio.gather(*tasks)
+        #    tasks = []
 
     await asyncio.gather(*tasks)
 
@@ -111,7 +111,7 @@ class WebPageViewSet(viewsets.ModelViewSet):
         query  = self.request.query_params.get('smart-search')
         if query != None:
             query__retrieve_embedding = SIMILARITY_MODEL.encode(query)
-            return WebPage.objects.alias(similarity=Min(L2Distance("embeddings__embedding", query__retrieve_embedding))).filter(Q(similarity__lte=5) | Q(title__search=query)).order_by("similarity")
+            return WebPage.objects.alias(similarity=Min(L2Distance("embeddings__embedding", query__retrieve_embedding))).filter(Q(similarity__lte=6) | Q(title__search=query)).order_by("similarity")
             
         return WebPage.objects.filter(is_redirect=False, domain__is_redirect=False).order_by(F("time_updated").desc(nulls_last=True), F("time_last_requested").desc(nulls_last=True))
 
@@ -121,7 +121,7 @@ class DomainWithWebpagesSerializer(serializers.HyperlinkedModelSerializer):
 
     class Meta:
         model = Domain
-        fields = ['id', 'url', 'title', 'description', 'image', 'time_updated', 'webpages']
+        fields = ['id', 'url', 'title', 'description', 'image', 'time_updated', 'time_discovered', 'webpages']
 
     def get_webpages(self, instance):
         webpages = instance.webpages.filter(is_redirect=False).order_by(F("time_updated").desc(nulls_last=True), F("time_last_requested").desc(nulls_last=True))[:5]
@@ -131,7 +131,7 @@ class DomainSerializer(serializers.HyperlinkedModelSerializer):
 
     class Meta:
         model = Domain
-        fields = ['id', 'url', 'title', 'description', 'image', 'time_updated']
+        fields = ['id', 'url', 'title', 'description', 'image', 'time_updated', 'time_discovered']
 
 # ViewSets define the view behavior.
 class DomainViewSet(viewsets.ModelViewSet):
@@ -152,6 +152,16 @@ class DomainViewSet(viewsets.ModelViewSet):
                 exclude = Q(tags__id__in=tags)
             else:
                 filter = filter & Q(tags__id__in=tags)
+
+        was_requested = self.request.query_params.get('was_requested')
+        if was_requested != None:
+            if was_requested == 'true':
+                if exclude == None:
+                    exclude = Q(time_last_requested=None)
+                else:
+                    exclude = exclude | Q(time_last_requested=None)
+            else:
+                filter = filter & Q(time_last_requested=None)
 
         if exclude != None:
             return Domain.objects.filter(filter).exclude(exclude).order_by(F("time_updated").desc(nulls_last=True), F("time_last_requested").desc(nulls_last=True))
@@ -201,6 +211,9 @@ def answer(request):
 
     async def find_best(full_strings, string_firsts, string_lengths, best):
         strings = list(map(lambda first: " ".join(full_strings[first:first+string_lengths]), string_firsts))
+        if len(strings) == 0:
+            return "", 0
+        
         #for string in strings:
         #    print(string)
         scores, indices = await rank(strings)
@@ -287,6 +300,7 @@ def answer(request):
 
     async def add_answer_from_matching_page(id, answers):
         webpage = await WebPage.objects.aget(id=id)
+        print(f'answering from {webpage.url}')
         answer, score = await retrieve_answer(webpage.url)
         answers.append(
             {

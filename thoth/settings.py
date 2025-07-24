@@ -36,6 +36,7 @@ INSTALLED_APPS = [
     "webpage.apps.WebpageConfig",
     "organize_webpages.apps.OrganizeWebpagesConfig",
     "users.apps.UsersConfig",
+    "notes.apps.NotesConfig",
 
     "django.contrib.admin",
     "django.contrib.auth",
@@ -173,7 +174,7 @@ CORS_ALLOW_ALL_ORIGINS = True
 ALLOWED_HOSTS = ["backend", "localhost"]
 
 CRONJOBS = [
-    ('*/5 * * * *', 'webpage.views.scrape_all')
+    ('*/15 * * * *', 'webpage.views.scrape_all')
 ]
 
 #start = timezone.now()

@@ -11,7 +11,7 @@ from .models import ThothUser
 class UserSerializer(serializers.HyperlinkedModelSerializer):
     class Meta:
         model = ThothUser
-        fields = ['username', 'email']
+        fields = ['id', 'username', 'email']
 
 
 @api_view(['POST'])

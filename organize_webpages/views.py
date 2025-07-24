@@ -8,6 +8,7 @@ from rest_framework.response import Response
 from rest_framework import serializers, viewsets, status, permissions, filters
 import django_filters.rest_framework
 
+from urllib.parse import urlparse
 import asyncio
 from asgiref.sync import async_to_sync
 
@@ -67,11 +68,17 @@ class ThothTagNestedSerializer(serializers.HyperlinkedModelSerializer):
         return ThothTagNestedSerializer(children, many=True).data
     
 class ThothTagSerializer(serializers.HyperlinkedModelSerializer):
+    direct_domains = serializers.SerializerMethodField()
     parents = serializers.PrimaryKeyRelatedField(queryset=ThothTag.objects.all(), many=True)
+    children = serializers.PrimaryKeyRelatedField(queryset=ThothTag.objects.all(), many=True)
 
     class Meta:
         model = ThothTag
-        fields = ['id', 'name', 'slug', 'is_top_level', 'parents']
+        fields = ['id', 'name', 'slug', 'is_top_level', 'direct_domains', 'parents', 'children']
+
+    def get_direct_domains(self, instance):
+        domains = Domain.objects.filter(id__in=list(map(lambda item: item.object_id, instance.items.filter(is_direct=True)))).order_by(F("time_updated").desc(nulls_last=True))
+        return DomainSerializer(domains, many=True).data
 
 # ViewSets define the view behavior.
 
@@ -98,20 +105,21 @@ class ThothTagViewSet(viewsets.ModelViewSet):
     serializer_class = ThothTagSerializer
 
 
-@api_view(['PUT'])
+@api_view(['PUT', 'DELETE'])
 @permission_classes((permissions.IsAuthenticated,))
-def add_domain(request):
+def tag_domains(request):
     if request.method == 'PUT':
         url = request.data.get('url')
         tag = request.data.get('tag')
 
-        domain = None
-        try:
-            domain = Domain.objects.get(url=url)
+        if not "http" in url:
+            url = "https://" + url
+        url_parse = urlparse(url)
+        url = url_parse.scheme + "://" + url_parse.hostname
 
-        except ObjectDoesNotExist:
-            if url[-1] == "/":
-                url = url[:-1]
+        domain = Domain.objects.filter(url=url).first()
+
+        if domain == None:
 
             print(url)
             async def get_real_domain(url):
@@ -132,9 +140,25 @@ def add_domain(request):
             if domain == None:            
                 return Response({'error': 'Oops'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        except:
-            return Response({'error': 'Oops'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
         domain.tags.add(tag)
+        
+        if domain.is_source == False:
+            domain.is_source = True
+            domain.save()
 
         return Response({'url': domain.url}, status=status.HTTP_200_OK)
+    
+    if request.method == 'DELETE':
+        url = request.data.get('url')
+        tag = request.data.get('tag')
+
+        domain = Domain.objects.filter(url=url).first()
+
+        if domain != None:
+            if tag in domain.tags.names():
+                domain.tags.remove(tag)
+                return Response({'url': domain.url}, status=status.HTTP_200_OK)
+            else:
+                return Response({'error': "Domain does not have tag '" + tag + "'."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        else:
+            return Response({'error': "Domain '" + url + "' does not exist."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
