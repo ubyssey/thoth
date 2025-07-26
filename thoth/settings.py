@@ -171,7 +171,7 @@ CSRF_TRUSTED_ORIGINS = [
 
 CORS_ALLOW_ALL_ORIGINS = True
 
-ALLOWED_HOSTS = ["thoth_backend", "localhost"]
+ALLOWED_HOSTS = ["thothbackend", "localhost"]
 
 CRONJOBS = [
     ('*/15 * * * *', 'webpage.views.scrape_all')
