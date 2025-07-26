@@ -162,16 +162,16 @@ REST_FRAMEWORK = {
 }
 
 CORS_ALLOWED_ORIGINS = [
-    "http://localhost:5174", "http://thoth.ubyssey.ca",
+    "http://localhost:5174", "http://thoth.ubyssey.ca", "http://api.thoth.ubyssey.ca", 
 ]
 
 CSRF_TRUSTED_ORIGINS = [
-    'http://localhost:5174', "http://thoth.ubyssey.ca"
+    'http://localhost:5174', "http://thoth.ubyssey.ca", "http://api.thoth.ubyssey.ca",
 ]
 
 CORS_ALLOW_ALL_ORIGINS = True
 
-ALLOWED_HOSTS = ["thothbackend", "localhost"]
+ALLOWED_HOSTS = ["localhost", '*']
 
 CRONJOBS = [
     ('*/15 * * * *', 'webpage.views.scrape_all')
