@@ -94,11 +94,15 @@ class AbstractWebObject(AbstractTaggableObject):
         abstract = True
 
 class DomainManager(models.Manager):
-    def get_domain_from_url(link, create_if_not_existing=True):
+    def get_domain_from_url(self, link, create_if_not_existing=True):
         '''
         Obtain a domain model from a url. If the domain does not exist in the database, create it.
         '''
         link_parse = urlparse(link)
+
+        if not "http" in link_parse.scheme or link_parse.hostname == None:
+            return None
+
         link_domain_str = link_parse.scheme + "://" + link_parse.hostname
         safe_domain = link_domain_str.replace("http://", "https://")
 
@@ -133,6 +137,10 @@ class Domain(AbstractWebObject):
 
         time_cutoff = timezone.now() - HIT_TIMEOUT
 
+        self.time_last_requested = timezone.now()
+
+        await self.asave()
+
         if not await WebPage.objects.filter(domain=self).aexists():
             await WebPage.objects.acreate(
                 url=self.url,
@@ -146,16 +154,18 @@ class Domain(AbstractWebObject):
                 level=0
                 )
 
+            #print(f"create homepage {self.url}")
+
         crawlpage_query = WebPage.objects.filter(Q(domain=self), Q(page_type="wordpress api") | Q(page_type="wordpress api index"), Q(is_source=True, time_last_requested__lte=time_cutoff) | Q(time_last_requested=None))
         hit_query = WebPage.objects.filter(Q(domain=self), Q(is_source=True, time_last_requested__lte=time_cutoff) | Q(time_last_requested=None))
-        
         tasks = []
+        
         if await crawlpage_query.aexists():
-            tasks = tasks + [asyncio.create_task(wp.hit()) async for wp in crawlpage_query.order_by('level', 'time_last_requested', '-time_updated')]
+            tasks = tasks + [wp.hit() async for wp in crawlpage_query.order_by('level', 'time_last_requested', '-time_updated')]
 
         if await hit_query.aexists():
-            tasks = tasks + [asyncio.create_task(wp.hit()) async for wp in hit_query.order_by('level', 'time_last_requested', '-time_updated')[:HIT_COUNT]]
-
+            tasks = tasks + [wp.hit() async for wp in hit_query.order_by('level', 'time_last_requested', '-time_updated')[:HIT_COUNT]]
+        
         return tasks
     
 class WebPageManager(models.Manager):
@@ -172,20 +182,27 @@ class WebPageManager(models.Manager):
         
         return super().create(**obj_data)
 
-    def obtain_webpage(url, title, time_discovered=timezone.now()):
+    def obtain_webpage(self, url, title, time_discovered=None):
         '''
         Return WebPage object with specific url if existing, setup one up if not 
         '''
         try:
+
+            if time_discovered == None:
+                time_discovered = timezone.now()
+            
             destination = None
 
             if not WebPage.objects.filter(url=url).exists():
                 if WebPage.objects.filter(url=url.replace("http://", "https://")).exists():
                     url = url.replace("http://", "https://")
-                    print(f' secure {url}')
+                    #print(f' secure {url}')
                 else:
 
                     domain = Domain.objects.get_domain_from_url(url)
+
+                    if domain == None:
+                        return None
 
                     if "https://" in domain.url and not "https://" in url:
                         url = url.replace("http://", "https://")
@@ -204,8 +221,8 @@ class WebPageManager(models.Manager):
             print(f"error: {url}, {e}")
             return None
 
-    async def aobtain_webpage(url, title, time_discovered=timezone.now()):
-        return await sync_to_async(self.obtain_webpage(url, title, time_discovered))
+    async def aobtain_webpage(self, url, title, time_discovered=timezone.now()):
+        return await sync_to_async(self.obtain_webpage)(url, title, time_discovered)
 
 
 class WebPage(AbstractWebObject):
@@ -239,11 +256,11 @@ class WebPage(AbstractWebObject):
         return self
 
     async def judge_destination_crawl_worthy(self, destinations):
-        domain = await Domain.objects.aget(self.domain)
+        domain = await Domain.objects.aget(id=self.domain_id)
 
         async def judge_destination(destination):
             if len(destination) > 510:
-                print(f'too long {url}')
+                print(f'too long {destination}')
                 return False
 
             is_crawl_worthy = crawl_worthy(destination) or crawl_worthy(self.url)
@@ -255,61 +272,68 @@ class WebPage(AbstractWebObject):
                     destination_domain = await sync_to_async(Domain.objects.get_domain_from_url)(destination, create_if_not_existing=False)
                     if destination_domain:
                         is_crawl_worthy = destination_domain.is_source
+            
+            return is_crawl_worthy
 
-        return filter(judge_destination, destinations)
+        worthy = []
+        for d in destinations:
+            if await judge_destination(d):
+                worthy.append(d)
+
+        return worthy
 
     async def hit(self):
-        #print(" - hit: " + self.url)
+        print(" - hit: " + self.url)
         hit_time = timezone.now()
         if not "http" in self.url:
             await self.adelete()
             return
 
-        #try:
-        async with aiohttp.ClientSession(headers=HEADER, max_line_size=8190 * 2, max_field_size=8190 * 2) as session:
-            async with session.get(self.url) as r:
-                print(f' - HITTED ({timezone.now() - hit_time})\n    - {self.url}')
-                
-                requested_page = None
-                url = str(r.url)
-
-                if url == self.url:
-                    requested_page = self
-                else:
-                    self.is_redirect = True
-                    self.time_last_requested = timezone.now()
-                    await self.asave()
-                    if self.level==0:
-                        domain = await Domain.objects.aget(id=self.domain_id)
-                        if not domain.url in url: 
-                            domain.is_redirect = True
-                            await domain.asave()
-
-                    if len(self.judge_destination_crawl_worthy([url])) > 0:
-                        redirect_webpage = await WebPage.objects.aobtain_webpage(url, self.title)
-                        if redirect_webpage != None:
-                            requested_page = redirect_webpage
-
-                if requested_page != None:
-                    if requested_page.page_type == "wordpress api":
-                        await requested_page.wp_page_api(r)
-                    elif requested_page.page_type == "wordpress api index":
-                        await requested_page.wp_page_api_index(r)
-                    else:
-                        if "pdf" in r.content_type:
-                            await self.scrape_pdf(r)
-                        elif "html" in r.content_type:
-                            await requested_page.scrape(r)
-                        else:
-                            print(f"WEIRD CONTENT TYPE {r.content_type} oops {self.url} ")
-                            requested_page.time_last_requested = timezone.now()
-                            await requested_page.asave()
-
-                return requested_page
+        try:
+            async with aiohttp.ClientSession(headers=HEADER, max_line_size=8190 * 2, max_field_size=8190 * 2) as session:
+                async with session.get(self.url) as r:
+                    print(f' - HITTED ({timezone.now() - hit_time})\n    - {self.url}')
                     
-        #except Exception as e: 
-        #    print(f"error: {self.url}, {e}")
-        #    return None
+                    requested_page = None
+                    url = str(r.url)
+
+                    if url == self.url:
+                        requested_page = self
+                    else:
+                        self.is_redirect = True
+                        self.time_last_requested = timezone.now()
+                        await self.asave()
+                        if self.level==0:
+                            domain = await Domain.objects.aget(id=self.domain_id)
+                            if not domain.url in url: 
+                                domain.is_redirect = True
+                                await domain.asave()
+
+                        if len(await self.judge_destination_crawl_worthy([url])) > 0:
+                            redirect_webpage = await WebPage.objects.aobtain_webpage(url, self.title)
+                            if redirect_webpage != None:
+                                requested_page = redirect_webpage
+
+                    if requested_page != None:
+                        if requested_page.page_type == "wordpress api":
+                            await requested_page.wp_page_api(r)
+                        elif requested_page.page_type == "wordpress api index":
+                            await requested_page.wp_page_api_index(r)
+                        else:
+                            if "pdf" in r.content_type:
+                                await self.scrape_pdf(r)
+                            elif "html" in r.content_type:
+                                await requested_page.scrape(r)
+                            else:
+                                print(f" - WEIRD CONTENT TYPE {r.content_type} oops {self.url} ")
+                                requested_page.time_last_requested = timezone.now()
+                                await requested_page.asave()
+
+                    return requested_page
+                        
+        except Exception as e: 
+            print(f"error: {self.url}, {e}")
+            return None
 
     def read_anchors(self, anchors):
         referrer_url_parse = urlparse(self.url)
@@ -357,19 +381,18 @@ class WebPage(AbstractWebObject):
             for url in urls:
                 if url != self.url and url in self.url:
                     subpages = True
-                title = url
-                if url in titles:
-                    title = titles[url]
+
+                if not url in titles:
+                    titles[url] = url 
             
-            urls = self.judge_destination_crawl_worthy(urls)
-            webpages_from_hyperlinks = [WebPage.objects.obtain_webpage(url, title, time_discovered=now) for url in urls]
+            urls = async_to_sync(self.judge_destination_crawl_worthy)(urls)
+            webpages_from_hyperlinks = [WebPage.objects.obtain_webpage(url, titles[url], time_discovered=now) for url in urls]
             webpages_from_hyperlinks = list(filter(lambda wp: wp!= None, webpages_from_hyperlinks))
             webpages_to_create = list(filter(lambda wp: wp._state.adding == True, webpages_from_hyperlinks))
 
             if len(webpages_to_create) > 0:
                 new_links = True
                 WebPage.objects.bulk_create(webpages_to_create)
-                print(f'create {len(webpages_to_create)} linked webpages  {timezone.now() - start}\n    - {self.url}')
 
             return webpages_from_hyperlinks
 
@@ -392,11 +415,8 @@ class WebPage(AbstractWebObject):
 
             Referral.objects.bulk_create(referals)
 
-            print(f'deal with {len(webpages)} referrals {timezone.now() - start}\n    - {self.url}')
-
         webpages = await get_or_create_pages(links, link_labels)
         await create_new_referrs(webpages)
-
         return subpages, new_links
 
     async def wp_page_api_test(self, wp_api_a, wp_api_b):
@@ -436,6 +456,7 @@ class WebPage(AbstractWebObject):
                 return 4
 
     async def wp_page_api_index(self, r):
+
         text = await r.text()
 
         API_ROUTES = ["pages", "posts", "media", "tribe_events"]
@@ -550,10 +571,10 @@ class WebPage(AbstractWebObject):
                 return
         
         pages = info
-
+        print(f"pages ({len(pages)}) {self.url}")
         tasks = []
         for page in pages:
-            tasks.append(asyncio.create_task(self.wp_page_api_read_item(page)))
+            tasks.append(self.wp_page_api_read_item(page))
         
         add_wp_articles_time = timezone.now()
         await asyncio.gather(*tasks)
@@ -615,10 +636,13 @@ class WebPage(AbstractWebObject):
                 if len(page["yoast_head_json"]["og_image"]) > 0:
                     image = page["yoast_head_json"]["og_image"][0]["url"]
 
-
         time_updated = timezone.make_aware(timezone.datetime.fromisoformat(page["modified"]))
 
         listed_page = await WebPage.objects.aobtain_webpage(page["link"], title)
+
+
+        if listed_page == None:
+            return None
 
         await listed_page.update(
             title=title, 
@@ -627,7 +651,7 @@ class WebPage(AbstractWebObject):
             time_updated=time_updated,
             time_last_requested=self.time_last_requested,
             )
-
+     
         if listed_page:
                 
             if "content" in page:
@@ -635,15 +659,13 @@ class WebPage(AbstractWebObject):
                 webpage_domain_str = webpage_parse.scheme + "://" + webpage_parse.hostname
 
                 anchors = BeautifulSoup(page["content"]["rendered"], "html.parser").find_all('a')
-
-                print(f"about to read anchors\n   - {listed_page.url}")
                 links, link_labels = listed_page.read_anchors(anchors)
-                print(f"read anchors\n   - {listed_page.url}")
+
                 await listed_page.deal_with_hyperlinks(links, link_labels)
 
-
     async def scrape(self, r):
-
+        print(f"start scrape\n    - {self.url}")
+        
         text = await r.text()
 
         start_scrape_time = timezone.now()
@@ -670,7 +692,6 @@ class WebPage(AbstractWebObject):
                                 self.time_published = timezone.datetime.fromisoformat(scheme["datePublished"])
                             break
 
-        #print(f"title\n   - {self.url}")
         ### Scrape title of webpage
         title = soup.find("meta", attrs={"property" : "og:title"})
         if title != None:
@@ -685,7 +706,6 @@ class WebPage(AbstractWebObject):
                 await Embeddings.objects.aencode(string=title, webpage=self, source_attribute="title")
             self.title = title
 
-        #print(f"desc\n   - {self.url}")
         ### Scrape description of webpage
         meta_description = soup.find("meta", attrs={"name" : "description"})
         if meta_description == None:
@@ -693,7 +713,6 @@ class WebPage(AbstractWebObject):
         if meta_description != None:
             self.description = meta_description.get("content")
 
-        #print(f"image\n   - {self.url}")
         ### Scrape image of webpage
         meta_image = soup.find("meta", attrs={"property" : "og:image"})
         if meta_image == None:
@@ -701,7 +720,6 @@ class WebPage(AbstractWebObject):
         if meta_image != None:
             self.image = meta_image.get("content")
 
-        #(f"modifed\n   - {self.url}")
         ### Scrape article modified time of webpage
         meta_article_publish_time = soup.find("meta", attrs={"property" : "article:published_time"})
         if meta_article_publish_time != None:
@@ -747,8 +765,8 @@ class WebPage(AbstractWebObject):
         
         if update_from_last_request:
                 self.time_updated = timezone.now()
-        else:
-            self.time_updated = time_updated
+        elif time_updated != None:
+            self.time_updated = time_updated.replace(tzinfo=timezone.get_current_timezone())
         
         webpage_domain = await Domain.objects.aget(id=self.domain_id)
         # Decide if webpage is a source
@@ -881,8 +899,6 @@ class WebPage(AbstractWebObject):
 
         if len(hyperlinks) > 0:
             await self.deal_with_hyperlinks(hyperlinks, {})
-            print(hyperlinks)
-
 
         # READ TEXT
         #text = "\n".join([page.extract_text() for page in reader.pages])
