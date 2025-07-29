@@ -43,21 +43,21 @@ def get_absolute_url(url, root_url):
     Transform 'url' into absolute url if a relative url
     '''
 
-    if link == None or link == "":
+    if url == None or url == "":
         return False
 
     # Some ubc subdomains are insecure (what the heck!)
     #link = link.replace("http://", "https://")
 
-    if link[:len("https://")] != "https://":
-        if link[:2] == "//":
-            link = "https:" + link
-        elif link[0] == "/":
-            link = webpage_domain_str + link
-        elif link[:len("http")] != "http":
+    if url[:len("https://")] != "https://":
+        if url[:2] == "//":
+            url = "https:" + url
+        elif url[0] == "/":
+            url = root_url + url
+        elif url[:len("http")] != "http":
             return False
 
-    url = urljoin(link, urlparse(link).path)
+    url = urljoin(url, urlparse(url).path)
     return url
 
 def read_last_modified_header(r):        
@@ -636,7 +636,9 @@ class WebPage(AbstractWebObject):
 
                 anchors = BeautifulSoup(page["content"]["rendered"], "html.parser").find_all('a')
 
-                links, link_labels = read_anchors(anchors, listed_page)
+                print(f"about to read anchors\n   - {listed_page.url}")
+                links, link_labels = listed_page.read_anchors(anchors)
+                print(f"read anchors\n   - {listed_page.url}")
                 await listed_page.deal_with_hyperlinks(links, link_labels)
 
 
@@ -668,6 +670,7 @@ class WebPage(AbstractWebObject):
                                 self.time_published = timezone.datetime.fromisoformat(scheme["datePublished"])
                             break
 
+        #print(f"title\n   - {self.url}")
         ### Scrape title of webpage
         title = soup.find("meta", attrs={"property" : "og:title"})
         if title != None:
@@ -682,6 +685,7 @@ class WebPage(AbstractWebObject):
                 await Embeddings.objects.aencode(string=title, webpage=self, source_attribute="title")
             self.title = title
 
+        #print(f"desc\n   - {self.url}")
         ### Scrape description of webpage
         meta_description = soup.find("meta", attrs={"name" : "description"})
         if meta_description == None:
@@ -689,6 +693,7 @@ class WebPage(AbstractWebObject):
         if meta_description != None:
             self.description = meta_description.get("content")
 
+        #print(f"image\n   - {self.url}")
         ### Scrape image of webpage
         meta_image = soup.find("meta", attrs={"property" : "og:image"})
         if meta_image == None:
@@ -696,6 +701,7 @@ class WebPage(AbstractWebObject):
         if meta_image != None:
             self.image = meta_image.get("content")
 
+        #(f"modifed\n   - {self.url}")
         ### Scrape article modified time of webpage
         meta_article_publish_time = soup.find("meta", attrs={"property" : "article:published_time"})
         if meta_article_publish_time != None:
@@ -727,7 +733,7 @@ class WebPage(AbstractWebObject):
 
         # COLLECT AND PROCESS HYPERLINKS
         anchors = soup.find_all('a')
-        links, link_labels = read_anchors(anchors, self)
+        links, link_labels = self.read_anchors(anchors)
         subpages, new_links = await self.deal_with_hyperlinks(links, link_labels)
         
         # Decide if webpage has updated
