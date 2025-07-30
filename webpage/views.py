@@ -51,22 +51,22 @@ def scrape_domain(request):
 @async_to_sync
 async def scrape_all():
     DOMAIN_TIMEOUT = timezone.timedelta(minutes=30)
-    MAX_TASKS = 500
+    MAX_TASKS = 1
 
     tasks = []
     domain_query = Q(time_last_requested__lte=timezone.now() - DOMAIN_TIMEOUT) | Q(time_last_requested=None)
     #async for domain in Domain.objects.filter(domain_query).order_by("-is_source", F("time_updated").desc(nulls_last=True), "time_discovered"):
     async for domain in Domain.objects.filter(domain_query).order_by("time_last_requested"):
-        print(f"start scrape\n     - {domain.url}")
         wps = await domain.get_webpage_to_hit()
+        #tasks = tasks + wps
 
-        tasks = tasks + wps
+        #if len(tasks) >= MAX_TASKS:
+        #    break
+        #    await asyncio.gather(*tasks)
+        #    tasks = []
 
-        if len(tasks) >= MAX_TASKS:
-            await asyncio.gather(*tasks)
-            tasks = []
-
-    await asyncio.gather(*tasks)
+    #if len(tasks) > 0:
+    #    await asyncio.gather(*tasks)
 
     print(f"finished scape all")
 
