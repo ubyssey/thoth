@@ -574,7 +574,7 @@ class WebPage(AbstractWebObject):
         print(f"pages ({len(pages)}) {self.url}")
         tasks = []
         for page in pages:
-            tasks.append(self.wp_page_api_read_item(page))
+            tasks.append(asyncio.create_task(self.wp_page_api_read_item(page)))
         
         add_wp_articles_time = timezone.now()
         await asyncio.gather(*tasks)
