@@ -91,7 +91,7 @@ class WebPageSerializer(serializers.HyperlinkedModelSerializer):
 
     class Meta:
         model = WebPage
-        fields = ['url', 'title', 'description', 'image','time_updated', 'time_published']
+        fields = ['id', 'url', 'title', 'description', 'image','time_updated', 'time_published']
 
 # Serializers define the API representation.
 class WebPageWithDomainSerializer(serializers.HyperlinkedModelSerializer):
@@ -99,7 +99,7 @@ class WebPageWithDomainSerializer(serializers.HyperlinkedModelSerializer):
 
     class Meta:
         model = WebPage
-        fields = ['url', 'title', 'description', 'image', 'domain', 'time_updated', 'time_published']
+        fields = ['id', 'url', 'title', 'description', 'image', 'domain', 'time_updated', 'time_published']
 
     def get_domain(self, instance):
         return DomainSerializer(instance.domain).data
