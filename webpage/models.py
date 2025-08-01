@@ -1,6 +1,6 @@
 from django.db import models
 from django.utils import timezone
-from django.db.models import Q
+from django.db.models import Q, F, Max, Min
 
 from pgvector.django import VectorField
 from sentence_transformers import SentenceTransformer
@@ -129,6 +129,17 @@ class Domain(AbstractWebObject):
     def check_robots_txt(self):
         pass
 
+    async def update_aggregate_data(self):
+        self.time_published = (await sync_to_async(self.webpages.aggregate)(Min('time_published')))["time_published__min"]
+        self.time_last_requested = (await sync_to_async(self.webpages.aggregate)(Max('time_last_requested')))["time_last_requested__max"]
+        self.time_updated = (await sync_to_async(self.webpages.aggregate)(Max('time_updated')))["time_updated__max"]
+
+        self.is_redirect = await self.webpages.filter(is_redirect=True).aexists() and not await self.webpages.filter(is_redirect=False).exclude(time_last_requested=None).aexists()
+
+        print(f'{self.url}\n    - pub: {self.time_published}\n    - req: {self.time_last_requested}\n    - upd: {self.time_updated}\n    - red: {self.is_redirect}')
+
+        await self.asave()
+        
     async def get_webpage_to_hit(self):
         #print("domain: " + self.url)
         HIT_COUNT = 5
@@ -158,6 +169,9 @@ class Domain(AbstractWebObject):
 
         crawlpage_query = WebPage.objects.filter(Q(domain=self), Q(page_type="wordpress api") | Q(page_type="wordpress api index"), Q(is_source=True, time_last_requested__lte=time_cutoff) | Q(time_last_requested=None))
         hit_query = WebPage.objects.filter(Q(domain=self), Q(is_source=True, time_last_requested__lte=time_cutoff) | Q(time_last_requested=None))
+        
+        non_source_query = WebPage.objects.filter(Q(domain=self), Q(time_last_requested=None))
+
         tasks = []
 
         '''
@@ -168,13 +182,21 @@ class Domain(AbstractWebObject):
             tasks = tasks + [asyncio.create_task(wp.hit()) async for wp in hit_query.order_by('level', 'time_last_requested', '-time_updated')[:HIT_COUNT]]
         '''
 
-        if await crawlpage_query.aexists():
-            tasks = tasks + [await wp.hit() async for wp in crawlpage_query.order_by('level', 'time_last_requested', '-time_updated')]
+        if self.is_source:
+            if await crawlpage_query.aexists():
+                tasks = tasks + [await wp.hit() async for wp in crawlpage_query.order_by('level', 'time_last_requested', '-time_updated')]
 
-        if await hit_query.aexists():
-            tasks = tasks + [await wp.hit() async for wp in hit_query.order_by('level', 'time_last_requested', '-time_updated')[:HIT_COUNT]]
+            if await hit_query.aexists():
+                tasks = tasks + [await wp.hit() async for wp in hit_query.order_by('level', 'time_last_requested', '-time_updated')[:HIT_COUNT]]
+
+        else:
+            if await non_source_query.aexists():
+                tasks = tasks + [await wp.hit() async for wp in non_source_query.order_by('-time_discovered')[:HIT_COUNT]]
+
+        tasks = tasks + [await self.update_aggregate_data()]
 
         return tasks
+
     
 class WebPageManager(models.Manager):
     def create(self, **obj_data):
@@ -298,6 +320,12 @@ class WebPage(AbstractWebObject):
                 async with session.get(self.url) as r:
                     #print(f' - HITTED ({timezone.now() - hit_time})\n    - {self.url}')
                     
+                    status_code_type = math.floor(r.status/100)
+                    if status_code_type == 4 or status_code_type == 5:
+                        self.time_last_requested = timezone.now()
+                        await self.asave()
+                        return
+
                     requested_page = None
                     url = str(r.url)
 
@@ -307,11 +335,6 @@ class WebPage(AbstractWebObject):
                         self.is_redirect = True
                         self.time_last_requested = timezone.now()
                         await self.asave()
-                        if self.level==0:
-                            domain = await Domain.objects.aget(id=self.domain_id)
-                            if not domain.url in url: 
-                                domain.is_redirect = True
-                                await domain.asave()
 
                         if len(await self.judge_destination_crawl_worthy([url])) > 0:
                             redirect_webpage = await WebPage.objects.aobtain_webpage(url, self.title)
@@ -547,10 +570,6 @@ class WebPage(AbstractWebObject):
         for api in API_ROUTES:
             await add_wp_api_page(api, pa)
 
-        webpage_domain.time_last_requested = self.time_last_requested
-        await self.asave()
-        await webpage_domain.asave()
-
 
     async def wp_page_api(self, r):
         text = await r.text()
@@ -654,6 +673,7 @@ class WebPage(AbstractWebObject):
                     image = page["yoast_head_json"]["og_image"][0]["url"]
 
         time_updated = timezone.make_aware(timezone.datetime.fromisoformat(page["modified"]))
+        time_published = timezone.make_aware(timezone.datetime.fromisoformat(page["date"]))
 
         listed_page = await WebPage.objects.aobtain_webpage(page["link"], title)
 
@@ -668,6 +688,7 @@ class WebPage(AbstractWebObject):
             description=description,
             image=image,
             time_updated=time_updated,
+            time_published=time_published,
             time_last_requested=self.time_last_requested,
             )
 
@@ -789,25 +810,18 @@ class WebPage(AbstractWebObject):
         elif time_updated != None:
             self.time_updated = time_updated.replace(tzinfo=timezone.get_current_timezone())
         
-        webpage_domain = await Domain.objects.aget(id=self.domain_id)
         # Decide if webpage is a source
-        if subpages and webpage_domain.is_source:
+        if subpages:
             self.is_source = True
 
         self.time_last_requested = timezone.now()
 
-        webpage_domain.time_last_requested = self.time_last_requested
-
-        if self.time_updated != None:
-            if webpage_domain.time_updated != None:
-                if webpage_domain.time_updated < self.time_updated:
-                    webpage_domain.time_updated = self.time_updated
-            else:
-                webpage_domain.time_updated = self.time_updated
-        elif self.time_published:
+        if self.time_published and self.time_updated == None:
             self.time_updated = self.time_published
 
         if self.level == 0:
+            webpage_domain = await Domain.objects.aget(id=self.domain_id)
+
             webpage_domain.description = self.description
             homepage_names = ["Home :: ", "Home - ", "Home | ", "Home Page | ", "Front Page | ", "Homepage | ", "Welcome | "]
             webpage_domain.title = self.title
@@ -819,13 +833,11 @@ class WebPage(AbstractWebObject):
             if og_site_name != None:
                 webpage_domain.title = og_site_name.get("content")
 
-
             def get_icon_size(icon):
                 if icon.get("sizes") != None:
                     return int(icon.get("sizes").split("x")[0])
                 else:
                     return 0
-
 
             web_domain_image = None
             apple_icons = soup.find_all("link", attrs={"rel" : "apple-touch-icon"})
@@ -869,10 +881,15 @@ class WebPage(AbstractWebObject):
                             time_discovered=self.time_last_requested,
                             )
             
-            await add_wp_index_page()
+            if webpage_domain.is_source:
+                await add_wp_index_page()
+    
+            await asyncio.gather(webpage_domain.asave(), self.asave())
+        
+        else:
+            await self.asave()
 
         print(f"save scrape {self.url}")
-        await asyncio.gather(webpage_domain.asave(), self.asave())
 
         #print(f' - SCRAPE ({timezone.now() - start_scrape_time})\n    - {self.url}')
 

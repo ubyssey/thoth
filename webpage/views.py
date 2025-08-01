@@ -78,20 +78,20 @@ async def scrape_single_domain(domain_url):
     domain = await Domain.objects.aget(url=domain_url)
 
     wps = await domain.get_webpage_to_hit()
-    tasks = tasks + wps
+    #tasks = tasks + wps
 
-    if len(tasks) > 50:
-        await asyncio.gather(*tasks)
-        tasks = []
+    #if len(tasks) > 50:
+    #    await asyncio.gather(*tasks)
+    #    tasks = []
 
-    await asyncio.gather(*tasks)
+    #await asyncio.gather(*tasks)
 
 # Serializers define the API representation.
 class WebPageSerializer(serializers.HyperlinkedModelSerializer):
 
     class Meta:
         model = WebPage
-        fields = ['url', 'title', 'description', 'image','time_updated']
+        fields = ['url', 'title', 'description', 'image','time_updated', 'time_published']
 
 # Serializers define the API representation.
 class WebPageWithDomainSerializer(serializers.HyperlinkedModelSerializer):
@@ -99,7 +99,7 @@ class WebPageWithDomainSerializer(serializers.HyperlinkedModelSerializer):
 
     class Meta:
         model = WebPage
-        fields = ['url', 'title', 'description', 'image', 'domain', 'time_updated']
+        fields = ['url', 'title', 'description', 'image', 'domain', 'time_updated', 'time_published']
 
     def get_domain(self, instance):
         return DomainSerializer(instance.domain).data
@@ -108,6 +108,7 @@ class WebPageWithDomainSerializer(serializers.HyperlinkedModelSerializer):
 class WebPageViewSet(viewsets.ModelViewSet):
     filterset_fields = ['id', 'url', 'domain_id']
     search_fields = ["url", "title", "description"]
+    ordering_fields = ["time_updated", "time_last_requested", "time_discovered", 'time_published']
     serializer_class = WebPageWithDomainSerializer
 
     def get_queryset(self):
