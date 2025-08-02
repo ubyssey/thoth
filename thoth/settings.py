@@ -174,7 +174,7 @@ CORS_ALLOW_ALL_ORIGINS = True
 ALLOWED_HOSTS = ["localhost", '*']
 
 CRONJOBS = [
-    ('*/15 * * * *', 'webpage.views.scrape_all')
+    ('*/15 * * * *', 'webpage.views.read_all')
 ]
 
 #start = timezone.now()

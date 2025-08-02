@@ -24,6 +24,12 @@ WP_API_FIRST_PAGE_SIZE = 20
 WP_API_MAX_PAGE_SIZE = 100
 
 def crawl_worthy(url):
+    '''
+    Determines which domains should be automatically marked with 'is_souce=True' and be crawled
+
+    It would be better to not hardcode this so that this project can be used by other organizations
+    without having to edit the code. 
+    '''
     return "ubc.ca" in url
 
 def count_path_segments(link):
@@ -61,7 +67,9 @@ def get_absolute_url(url, root_url):
     return url
 
 def read_last_modified_header(r):        
-    # USE Last-Modified HEADER AS PUBLISH DATE IF BEFORE DISCOVER TIME
+    '''
+    Return the 'Last-Modified' header from a http response as a datetime object with timezone set to server timezone
+    '''
     if "Last-Modified" in r.headers.keys():
         modified = timezone.datetime.strptime(r.headers.get("Last-Modified"), '%a, %d %b %Y %H:%M:%S GMT')
         modified = modified.replace(tzinfo=timezone.get_current_timezone())
@@ -130,6 +138,9 @@ class Domain(AbstractWebObject):
         pass
 
     async def update_aggregate_data(self):
+        '''
+        Update the Domain information that comes from data aggregated from the domain's webapges
+        '''
         self.time_published = (await sync_to_async(self.webpages.aggregate)(Min('time_published')))["time_published__min"]
         self.time_last_requested = (await sync_to_async(self.webpages.aggregate)(Max('time_last_requested')))["time_last_requested__max"]
         self.time_updated = (await sync_to_async(self.webpages.aggregate)(Max('time_updated')))["time_updated__max"]
@@ -140,12 +151,13 @@ class Domain(AbstractWebObject):
 
         await self.asave()
         
-    async def get_webpage_to_hit(self):
+    async def read_webpages(self, count=5):
+        '''
+        Read webpages 
+        '''
         #print("domain: " + self.url)
-        HIT_COUNT = 5
-        #HIT_TIMEOUT = timezone.timedelta(hours = 3)
-        HIT_TIMEOUT = timezone.timedelta(minutes = 1)
-
+        HIT_TIMEOUT = timezone.timedelta(hours = 3)
+        
         time_cutoff = timezone.now() - HIT_TIMEOUT
 
         self.time_last_requested = timezone.now()
@@ -176,22 +188,22 @@ class Domain(AbstractWebObject):
 
         '''
         if await crawlpage_query.aexists():
-            tasks = tasks + [asyncio.create_task(wp.hit()) async for wp in crawlpage_query.order_by('level', 'time_last_requested', '-time_updated')]
+            tasks = tasks + [asyncio.create_task(wp.read()) async for wp in crawlpage_query.order_by('level', 'time_last_requested', '-time_updated')]
 
         if await hit_query.aexists():
-            tasks = tasks + [asyncio.create_task(wp.hit()) async for wp in hit_query.order_by('level', 'time_last_requested', '-time_updated')[:HIT_COUNT]]
+            tasks = tasks + [asyncio.create_task(wp.read()) async for wp in hit_query.order_by('level', 'time_last_requested', '-time_updated')[:count]]
         '''
 
         if self.is_source:
             if await crawlpage_query.aexists():
-                tasks = tasks + [await wp.hit() async for wp in crawlpage_query.order_by('level', 'time_last_requested', '-time_updated')]
+                tasks = tasks + [await wp.read() async for wp in crawlpage_query.order_by('level', 'time_last_requested', '-time_updated')]
 
             if await hit_query.aexists():
-                tasks = tasks + [await wp.hit() async for wp in hit_query.order_by('level', 'time_last_requested', '-time_updated')[:HIT_COUNT]]
+                tasks = tasks + [await wp.read() async for wp in hit_query.order_by('level', 'time_last_requested', '-time_updated')[:count]]
 
         else:
             if await non_source_query.aexists():
-                tasks = tasks + [await wp.hit() async for wp in non_source_query.order_by('-time_discovered')[:HIT_COUNT]]
+                tasks = tasks + [await wp.read() async for wp in non_source_query.order_by('-time_discovered')[:count]]
 
         tasks = tasks + [await self.update_aggregate_data()]
 
@@ -260,7 +272,7 @@ class WebPage(AbstractWebObject):
     async def update(self, **kwargs):
         '''
         Update webpage if attributes are changed or model is unsaved.
-        Save embedding if title is updated.
+        Save new embedding if title is updated.
         '''
 
         changes = False
@@ -268,12 +280,14 @@ class WebPage(AbstractWebObject):
         for attribute in vars(self).keys():
             if attribute in kwargs:
 
+                if attribute == "title":
+                    if not await self.embeddings.filter(source_attribute="title").aexists() or self.title != kwargs["title"]:
+                        await Embeddings.objects.aencode(string=kwargs["title"], webpage=self, source_attribute="title")
+
                 if getattr(self, attribute) != kwargs[attribute]:
                     setattr(self, attribute, kwargs[attribute])
                     changes = True
                 
-                    if attribute == "title":
-                        await Embeddings.objects.aencode(string=self.title, webpage=self, source_attribute="title")
 
         if changes or self._state.adding == True:
             await self.asave()
@@ -282,6 +296,27 @@ class WebPage(AbstractWebObject):
         return self
 
     async def judge_destination_crawl_worthy(self, destinations):
+        '''
+        Takes an iterable of urls (destinations) that we assume this webpage hyperlinked to and
+        returns the subset where each url is considered worthy of saving in the database. We call
+        such urls "crawl worthy".
+        
+        There are three ways for a url to be considered crawl worthy. 
+
+        Hardcoded: The 'crawl_worthy()' function dictates what urls are inherently crawl worthy.
+            At the moment that just means those where the url includes 'ubc.ca'. 
+            We don't want to use this forever as the software should ideally be application neutral
+            with customization able to happen using the frontend.
+
+        Referred by a source or crawl_worthy domain: If this WebPage's domain is crawl_worthy or has
+            'is_source=True' then all thse 'desination' urls that it is hyperlinking to are considered
+            crawl worthy
+
+        Belongs to a source domain: If the domain of this url already exists as a Domain in the database
+            and that domain has 'is_source' true, then this url is considered crawl worthy
+            Urls can also be crawl worthy if they were
+        '''
+
         domain = await Domain.objects.aget(id=self.domain_id)
 
         async def judge_destination(destination):
@@ -308,7 +343,26 @@ class WebPage(AbstractWebObject):
 
         return worthy
 
-    async def hit(self):
+    async def read(self):
+        '''
+        Makes a request to the webpage's 'url' and then parse the response to update it in the database 
+
+        Redirects: If there is a redirect, then mark this webapge 'redirect=True' and then use the response to
+            update the resolved url's webpage in the database
+
+        Status codes: Right now we just mark the webpage as requested by setting 'time_last_requested' but don't
+            parse the response or update anything else about the webpage. This is not ideal as some pages might
+            only be temporarily broken and we don't want their information to be missing in our databse forever.
+            In the future we should have some 'last_status_code' field in the WebPage model
+
+        Types of files: We need different methods to parse each file type
+            1. HTML: We call '.read_html()'
+            2. PDF: We call '.read_pdf()'
+            3. JSON: 
+                - We call  '.wp_page_api_index()' for wordpress api index pages
+                - We call '.wp_page_api(); for wordpress rest api endpoints
+        '''
+
         print(" - hit: " + self.url)
         hit_time = timezone.now()
         if not "http" in self.url:
@@ -348,9 +402,9 @@ class WebPage(AbstractWebObject):
                             await requested_page.wp_page_api_index(r)
                         else:
                             if "pdf" in r.content_type:
-                                await self.scrape_pdf(r)
+                                await self.read_pdf(r)
                             elif "html" in r.content_type:
-                                await requested_page.scrape(r)
+                                await requested_page.read_html(r)
                             else:
                                 print(f" - WEIRD CONTENT TYPE {r.content_type} oops {self.url} ")
                                 requested_page.time_last_requested = timezone.now()
@@ -364,6 +418,18 @@ class WebPage(AbstractWebObject):
             return None
 
     def read_anchors(self, anchors):
+        '''
+        Recieved anchor tags (anchors) found by scraping this page with beautifulSoup
+        'soup.find_all("a")' and returns urls and a dictionary that maps urls to guessed
+        at webpage titles.
+
+        Urls: The href attributes of the anchor elements are transformed to absolute urls using
+            'get_absolute_url()'
+
+        Titles: The titles of the webpage denoted by the url are guessed at by using the innertext
+            or other attributes of the anchor element.
+        '''
+
         referrer_url_parse = urlparse(self.url)
         referrer_domain_str = referrer_url_parse.scheme + "://" + referrer_url_parse.hostname
 
@@ -394,6 +460,14 @@ class WebPage(AbstractWebObject):
         return urls, titles
 
     async def deal_with_hyperlinks(self, links, link_labels):
+        '''
+        Recieves a list of urls hyperlinked from this webpage and a dictionary mapping those urls
+        to webpage titles. This data likely comes '.read_anchors()'. 
+        
+        Creates a WebPage object for each url that doesn't already exist in the database and makes
+        Referral objects for each source-destination pair that doesn't already exist.
+        '''
+
         subpages = False
         new_links = False
 
@@ -402,6 +476,15 @@ class WebPage(AbstractWebObject):
 
         @sync_to_async
         def get_or_create_pages(urls, titles):
+            '''
+            Recieves an iterable of urls and a dictionary for titles mapping those urls to predicted
+            names.
+
+            Saves a WebPage object for every url in urls that does not already exist in the database.
+
+            Returns WebPage objects for every url
+            '''
+
             global subpages, new_links
 
             start = timezone.now()
@@ -430,6 +513,11 @@ class WebPage(AbstractWebObject):
             return webpages_from_hyperlinks
 
         async def create_new_referrs(webpages):
+            '''
+            Save Referrals for every source-destination pair that doesn't already exist
+            in the database
+            '''
+
             start = timezone.now()
             referals = []
             print(f'                        - start create refers {self.url} {len(webpages)}')
@@ -457,11 +545,27 @@ class WebPage(AbstractWebObject):
         return subpages, new_links
 
     async def wp_page_api_test(self, wp_api_a, wp_api_b):
-        # Wordpress api can be messed up sometimes.
-        # This allows us to test that the parameters we are using are all fine in combination
-        # Do not save api requests with untested parameter combinations 
+        '''
+        Wordpress api can be messed up sometimes. This method allows us to test that
+        the parameters we are using are all fine in combination. We do this by
+        requesting two separate api endpoints and make sure that they satisfy these
+        conditions.
+            1. Neither request returns an error
+            2. Both responses are in a list format
+            3. Responses return separate data
+        
+        We try out multiple paramater combinations and also try requesting different items
+        as sometimes individual items have badly formated json. We make these adjustments
+        until we find parameter combinations and requests that satisfy the conditions or we
+        are out of possibilities. 
+
+        Make sure you use this method for saving any wordpress api requests.
+        '''
 
         async def async_web_request(url):
+            '''
+            Request to the api endpoint and return the response as json
+            '''
             async with aiohttp.ClientSession(headers=HEADER, max_line_size=8190 * 2, max_field_size=8190 * 2) as session:
                 async with session.get(url) as r:
                     return json.loads(await r.text())
@@ -493,6 +597,11 @@ class WebPage(AbstractWebObject):
                 return 4
 
     async def wp_page_api_index(self, r):
+        '''
+        Read through the wordpess api index page located at '/wp-json/wp/v2/', identify endpoints
+        we want to read, use '.wp_page_api_test()' to test them, and then add those endpoints as
+        WebPages to the database
+        '''
 
         text = await r.text()
 
@@ -518,6 +627,11 @@ class WebPage(AbstractWebObject):
 
         @sync_to_async
         def add_wp_api_page(api, pa):
+            '''
+            If not existing save a WebPage object for a wordpress REST api endpoint where
+            'api' is the target model and 'pa' is the index of the valid api parameter
+            combination in 'possible_api_routes' as determined by 'wp_page_api_test'. 
+            '''
             if f"/wp/v2/{api}" in info["routes"]:
                 api_page = possible_api_routes[pa](api, 1, WP_API_FIRST_PAGE_SIZE)
                 if not WebPage.objects.filter(domain_id=self.domain_id, url=api_page).exists():
@@ -572,6 +686,18 @@ class WebPage(AbstractWebObject):
 
 
     async def wp_page_api(self, r):
+        '''
+        Use 'wp_page_api_read_item' to save each item in a wordpress REST api response as a Webpage
+        in the database. Then, as the api is paginated, add the endpoint's next page to the database
+        as WebPage if we believe it exists and it does not already exist in the database.
+
+        Errors: 
+            1. We delete this page if we recieve 'rest_post_invalid_page_number' because that means
+                we have read all pages in this endpoint
+            2. We decrease the 'per_page' parameter if we recieve 
+                {'code': 'rest_invalid_param', 'message': 'Invalid parameter(s): per_page'}
+        '''
+
         text = await r.text()
 
         self.time_last_requested = timezone.now()
@@ -650,6 +776,11 @@ class WebPage(AbstractWebObject):
         await self.asave()
 
     async def wp_page_api_read_item(self, page):
+        '''
+        Read an item from a wordpress REST api and save or update WebPage in the database.
+            - Example endpoint: https://arts.ubc.ca/wp-json/wp/v2/pages 
+        '''
+
         if "media_type" in page:
             if not page["media_type"] in ["file", "application", "video", "audio"]:
                 return
@@ -703,19 +834,22 @@ class WebPage(AbstractWebObject):
         
         print(f'      - read item {listed_page.url}')
 
-    async def scrape(self, r):
+    async def read_html(self, r):
+        '''
+        Use BeautifulSoup to scrape a html page for information to update this WebPage
+        '''
         
         text = await r.text()
 
-        start_scrape_time = timezone.now()
+        start_read_time = timezone.now()
 
         start_time = timezone.now()
         soup = BeautifulSoup(text, 'html.parser')
         print(f'      - soup ({timezone.now() - start_time})\n    - {self.url}')
         
-        # SCRAPE INFORMATION FROM WEBPAGE
+        # read INFORMATION FROM WEBPAGE
 
-        ### Scrape 'time_updated' and 'time_published' from yoast schema graph if existing
+        ### read 'time_updated' and 'time_published' from yoast schema graph if existing
         time_updated = None
         yoast_graph = soup.find("script", attrs={"type" : "application/ld+json", "class": "yoast-schema-graph"})
         if yoast_graph != None:
@@ -731,7 +865,7 @@ class WebPage(AbstractWebObject):
                                 self.time_published = timezone.datetime.fromisoformat(scheme["datePublished"])
                             break
 
-        ### Scrape title of webpage
+        ### read title of webpage
         title = soup.find("meta", attrs={"property" : "og:title"})
         if title != None:
             title = title.get("content")
@@ -745,21 +879,21 @@ class WebPage(AbstractWebObject):
                 await Embeddings.objects.aencode(string=title, webpage=self, source_attribute="title")
             self.title = title
 
-        ### Scrape description of webpage
+        ### read description of webpage
         meta_description = soup.find("meta", attrs={"name" : "description"})
         if meta_description == None:
             meta_description = soup.find("meta", attrs={"property" : "og:description"})
         if meta_description != None:
             self.description = meta_description.get("content")
 
-        ### Scrape image of webpage
+        ### read image of webpage
         meta_image = soup.find("meta", attrs={"property" : "og:image"})
         if meta_image == None:
             meta_image = soup.find("meta", attrs={"name" : "twitter:image"})
         if meta_image != None:
             self.image = meta_image.get("content")
 
-        ### Scrape article modified time of webpage
+        ### read article modified time of webpage
         meta_article_publish_time = soup.find("meta", attrs={"property" : "article:published_time"})
         if meta_article_publish_time != None:
             meta_article_publish_time = meta_article_publish_time.get("content")
@@ -768,7 +902,7 @@ class WebPage(AbstractWebObject):
             except:
                 print("not iso: " + meta_article_publish_time)
 
-        ### Scrape article modified time of webpage
+        ### read article modified time of webpage
         meta_article_modified_time = soup.find("meta", attrs={"property" : "article:modified_time"})
         if meta_article_modified_time != None:
             meta_article_modified_time = meta_article_modified_time.get("content")
@@ -820,6 +954,10 @@ class WebPage(AbstractWebObject):
             self.time_updated = self.time_published
 
         if self.level == 0:
+            '''
+            If this WebPage represents a root url, then use the collected information to
+            update the WebPage's Domain. 
+            '''
             webpage_domain = await Domain.objects.aget(id=self.domain_id)
 
             webpage_domain.description = self.description
@@ -869,6 +1007,9 @@ class WebPage(AbstractWebObject):
 
             @sync_to_async
             def add_wp_index_page():
+                '''
+                Add the Wordpress api index page if there are clues that this site uses Wordpress
+                '''
                 if "/wp-json/" in text or "/wp-content/" in text:
                     if not WebPage.objects.filter(domain=webpage_domain, page_type="wordpress api index").exists():
                         print(f" - {self.url} created index page {webpage_domain.url + '/wp-json/wp/v2/'}")
@@ -889,11 +1030,15 @@ class WebPage(AbstractWebObject):
         else:
             await self.asave()
 
-        print(f"save scrape {self.url}")
+        print(f"save read {self.url}")
 
-        #print(f' - SCRAPE ({timezone.now() - start_scrape_time})\n    - {self.url}')
+        #print(f' - read ({timezone.now() - start_read_time})\n    - {self.url}')
 
-    async def scrape_pdf(self, r):
+    async def read_pdf(self, r):
+        '''
+        Scrape information from a PDF file for information to update this WebPage
+        '''
+
         print(f' - IGNORE PDF {r.url} for now')
         reader = PdfReader(BytesIO(await r.read()))
 
@@ -974,6 +1119,10 @@ class Referral(models.Model):
 class EmbeddingsManager(models.Manager):
 
     def encode(self, string, webpage, source_attribute):
+        '''
+        Save an Embedding from 'string' attached to 'webpage' and labeled with 'source_attribute'
+        '''
+
         start_time = timezone.now()
         
         embedding = SIMILARITY_MODEL.encode(string)
@@ -990,6 +1139,9 @@ class EmbeddingsManager(models.Manager):
         return super().create(**obj_data)
     
     async def aencode(self, string, webpage, source_attribute):
+        '''
+        Aysnchronouse version of '.encode()'
+        '''
         return await sync_to_async(self.encode)(string, webpage, source_attribute)
 
 

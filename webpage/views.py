@@ -38,18 +38,18 @@ def remove_contiguous_whitespace(s):
 # Create your views here.
 
 def index(request):
-    scrape_all()
+    read_all()
     return HttpResponse("Hello, world. You're at the polls index.")
 
-def scrape_domain(request):
+def read_domain(request):
     domain = request.GET.get('domain', None)
     if domain != None:
-        scrape_single_domain(domain)
+        read_single_domain(domain)
     return HttpResponse("Hello, world. You're at the polls index.")
 
 
 @async_to_sync
-async def scrape_all():
+async def read_all():
     DOMAIN_TIMEOUT = timezone.timedelta(minutes=30)
     MAX_TASKS = 1
 
@@ -57,7 +57,7 @@ async def scrape_all():
     domain_query = Q(time_last_requested__lte=timezone.now() - DOMAIN_TIMEOUT) | Q(time_last_requested=None)
     #async for domain in Domain.objects.filter(domain_query).order_by("-is_source", F("time_updated").desc(nulls_last=True), "time_discovered"):
     async for domain in Domain.objects.filter(domain_query).order_by("time_last_requested"):
-        wps = await domain.get_webpage_to_hit()
+        wps = await domain.read_webpages()
         #tasks = tasks + wps
 
         #if len(tasks) >= MAX_TASKS:
@@ -72,12 +72,12 @@ async def scrape_all():
 
 
 @async_to_sync
-async def scrape_single_domain(domain_url):
+async def read_single_domain(domain_url):
 
     tasks = []
     domain = await Domain.objects.aget(url=domain_url)
 
-    wps = await domain.get_webpage_to_hit()
+    wps = await domain.read_webpages()
     #tasks = tasks + wps
 
     #if len(tasks) > 50:

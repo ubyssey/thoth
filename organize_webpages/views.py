@@ -125,7 +125,7 @@ def tag_domains(request):
             async def get_real_domain(url):
                 domain = await Domain.objects.acreate(url=url, is_source=True, time_discovered=timezone.now())
 
-                webpages_to_hit = await domain.get_webpage_to_hit()
+                webpages_to_hit = await domain.read_webpages()
                 webpages = await asyncio.gather(*webpages_to_hit)
                 print(webpages)
                 webpages = filter(lambda wp: wp != None, webpages)
