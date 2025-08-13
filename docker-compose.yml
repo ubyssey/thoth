@@ -1,0 +1,60 @@
+version: "3.7"
+
+networks:
+  proxy-shared:
+    external: true
+  thoth-internal:
+    driver: overlay
+
+services:
+  db:
+    image: ankane/pgvector:latest
+    restart: always
+    environment:
+      POSTGRES_DB: thoth
+      POSTGRES_USER: root
+      POSTGRES_PASSWORD: secret
+      POSTGRES_HOST_AUTH_METHOD: trust
+    networks:
+      - thoth-internal
+    ports:
+      - 5432:5432
+    volumes:
+      - thoth_data:/var/lib/postgresql/data/
+
+  thothbackend:
+    image: ghcr.io/ubyssey/thoth:latest
+    command:
+      - bash
+      - -c
+      - "python manage.py migrate && python manage.py crontab add && service cron start && python manage.py runserver 0.0.0.0:8000"
+    networks:
+      - proxy-shared
+      - thoth-internal
+    depends_on:
+      - db
+    stdin_open: true
+    tty: true
+    deploy:
+      restart_policy:
+        condition: on-failure
+        max_attempts: 3
+        window: 120s
+
+  thothfrontend:
+    image: ghcr.io/ubyssey/thoth-frontend:latest
+    environment:
+      ORIGIN: https://thoth.ubyssey.ca
+    networks:
+      - proxy-shared
+      - thoth-internal
+    depends_on:
+      - thothbackend
+    deploy:
+      restart_policy:
+        condition: on-failure
+        max_attempts: 3
+        window: 120s
+
+volumes:
+  thoth_data:
