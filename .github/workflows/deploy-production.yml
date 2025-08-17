@@ -74,23 +74,30 @@ jobs:
           workload_identity_provider: 'projects/863738545301/locations/global/workloadIdentityPools/ubyssey-wif-pool-prd/providers/ubyssey-oidc-github-prd'
           service_account: 'deployment@ubyssey-prd.iam.gserviceaccount.com'
 
-      - name: Configure SSH
+      - name: Configure SSH (improved)
         run: |
           mkdir -p ~/.ssh/
-          echo "$SSH_KEY" > ~/.ssh/production.key
+          # Write SSH key with proper line endings
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/production.key
           chmod 600 ~/.ssh/production.key
+          
+          # Validate the key format
+          ssh-keygen -l -f ~/.ssh/production.key || echo "Invalid key format"
+          
           cat >>~/.ssh/config <<END
           Host production
             HostName $SSH_HOST
             User $SSH_USER
             IdentityFile ~/.ssh/production.key
             StrictHostKeyChecking no
+            PubkeyAuthentication yes
+            PasswordAuthentication no
           END
         env:
           SSH_USER: github-actions-thoth
           SSH_KEY: ${{ secrets.GCP_SSH_PRIVATE_KEY_PRODUCTION }}
           SSH_HOST: ${{ secrets.GCP_SSH_HOST_PRODUCTION }}
-
+      
       - name: Create thoth directory
         run: ssh production "mkdir -p /opt/thoth"
 
