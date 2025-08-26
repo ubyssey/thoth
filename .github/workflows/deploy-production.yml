@@ -85,9 +85,13 @@ jobs:
     
   deploy:
     needs: build
-    # Run deploy only if build succeeded or was skipped, AND frontend didn't fail
     if: always() && (needs.build.result == 'success' || needs.build.result == 'skipped') && github.event.inputs.frontend_build_success != 'false'
     runs-on: ubuntu-latest
+
+    # Define tags as job-level environment variables
+    env:
+      BACKEND_TAG: ${{ github.event.inputs.skip_backend_build == 'true' && (github.event.inputs.backend_version || 'latest') || github.ref_name }}
+      FRONTEND_TAG: ${{ github.event.inputs.frontend_version || 'latest' }}
 
     permissions:
       contents: 'read'
@@ -105,7 +109,7 @@ jobs:
       - name: Configure SSH
         run: |
           mkdir -p ~/.ssh/
-          echo "$SSH_KEY" > ~/.ssh/production.key
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/production.key
           chmod 600 ~/.ssh/production.key
           cat >>~/.ssh/config <<END
           Host production
@@ -122,24 +126,11 @@ jobs:
       - name: Create thoth directory
         run: ssh production "mkdir -p /opt/thoth"
       
-      - name: Set tags in docker-compose.yml
+      - name: Validate Docker images
         run: |
-          # Backend tag
-          if [ "${{ github.event.inputs.skip_backend_build }}" == "true" ]; then
-            BACKEND_TAG="${{ github.event.inputs.backend_version }}"
-            if [ -z "$BACKEND_TAG" ]; then
-              BACKEND_TAG="latest"
-            fi
-          else
-            BACKEND_TAG="${{ github.ref_name }}"
-          fi
+          echo "Using backend tag: $BACKEND_TAG"
+          echo "Using frontend tag: $FRONTEND_TAG"
           
-          # Frontend tag from input or default to latest
-          FRONTEND_TAG="${{ github.event.inputs.frontend_version }}"
-          if [ -z "$FRONTEND_TAG" ]; then
-            FRONTEND_TAG="latest"
-          fi
-
           echo "Validating backend image: ghcr.io/ubyssey/thoth:$BACKEND_TAG"
           if docker manifest inspect ghcr.io/ubyssey/thoth:$BACKEND_TAG >/dev/null 2>&1; then
             echo "✅ Backend tag $BACKEND_TAG exists"
@@ -155,12 +146,20 @@ jobs:
             echo "❌ Frontend tag $FRONTEND_TAG not found"
             exit 1
           fi
-          
+
+      - name: Set tags in docker-compose.yml
+        run: |
           sed -i "s/\${BACKEND_TAG}/$BACKEND_TAG/g" docker-compose.yml
           sed -i "s/\${FRONTEND_TAG}/$FRONTEND_TAG/g" docker-compose.yml
 
       - name: Upload Docker Compose configuration
         run: scp docker-compose.yml production:/opt/thoth/docker-compose.yml
+
+      - name: Pull Docker images for frontend and backend in parallel
+        run: |
+          ssh production "docker pull ghcr.io/ubyssey/thoth:$BACKEND_TAG" &
+          ssh production "docker pull ghcr.io/ubyssey/thoth-frontend:$FRONTEND_TAG" &
+          wait  # Wait for both background processes to complete
 
       - name: Create shared network
         run: ssh production "docker network create --driver=overlay proxy-shared || true"
