@@ -23,7 +23,7 @@ services:
       - thoth_data:/var/lib/postgresql/data/
 
   thothbackend:
-    image: ghcr.io/ubyssey/thoth:latest
+    image: ghcr.io/ubyssey/thoth:${BACKEND_TAG}
     command:
       - bash
       - -c
@@ -42,7 +42,7 @@ services:
         window: 120s
 
   thothfrontend:
-    image: ghcr.io/ubyssey/thoth-frontend:latest
+    image: ghcr.io/ubyssey/thoth-frontend:${FRONTEND_TAG}
     environment:
       ORIGIN: https://thoth.ubyssey.ca
     networks:
