@@ -127,13 +127,19 @@ jobs:
           # Backend tag
           if [ "${{ github.event.inputs.skip_backend_build }}" == "true" ]; then
             BACKEND_TAG="${{ github.event.inputs.backend_version }}"
+            if [ -z "$BACKEND_TAG" ]; then
+              BACKEND_TAG="latest"
+            fi
           else
             BACKEND_TAG="${{ github.ref_name }}"
           fi
           
           # Frontend tag from input or default to latest
           FRONTEND_TAG="${{ github.event.inputs.frontend_version }}"
-          
+          if [ -z "$FRONTEND_TAG" ]; then
+            FRONTEND_TAG="latest"
+          fi
+
           echo "Validating backend image: ghcr.io/ubyssey/thoth:$BACKEND_TAG"
           if docker manifest inspect ghcr.io/ubyssey/thoth:$BACKEND_TAG >/dev/null 2>&1; then
             echo "✅ Backend tag $BACKEND_TAG exists"
