@@ -167,6 +167,11 @@ jobs:
       - name: Deploy Thoth stack
         run: ssh production "docker stack deploy --compose-file /opt/thoth/docker-compose.yml thoth"
 
+      - name: Update docker service
+        run: |
+          ssh production "docker service update --image ghcr.io/ubyssey/thoth:$BACKEND_TAG thoth_backend --force || true"
+          ssh production "docker service update --image ghcr.io/ubyssey/thoth-frontend:$FRONTEND_TAG thoth_frontend --force || true"
+
   build-failed:
     needs: build   
     # Run only if deployment should be skipped due to build failures
