@@ -126,16 +126,29 @@ jobs:
         run: |
           # Backend tag
           if [ "${{ github.event.inputs.skip_backend_build }}" == "true" ]; then
-            BACKEND_TAG="${{ github.event.inputs.backend_version || 'latest' }}"
+            BACKEND_TAG="${{ github.event.inputs.backend_version }}"
           else
             BACKEND_TAG="${{ github.ref_name }}"
           fi
           
           # Frontend tag from input or default to latest
-          FRONTEND_TAG="${{ github.event.inputs.frontend_version || 'latest' }}"
+          FRONTEND_TAG="${{ github.event.inputs.frontend_version }}"
           
-          echo "Using backend tag: $BACKEND_TAG"
-          echo "Using frontend tag: $FRONTEND_TAG"
+          echo "Validating backend image: ghcr.io/ubyssey/thoth:$BACKEND_TAG"
+          if docker manifest inspect ghcr.io/ubyssey/thoth:$BACKEND_TAG >/dev/null 2>&1; then
+            echo "✅ Backend tag $BACKEND_TAG exists"
+          else
+            echo "❌ Backend tag $BACKEND_TAG not found"
+            exit 1
+          fi
+          
+          echo "Validating frontend image: ghcr.io/ubyssey/thoth-frontend:$FRONTEND_TAG"
+          if docker manifest inspect ghcr.io/ubyssey/thoth-frontend:$FRONTEND_TAG >/dev/null 2>&1; then
+            echo "✅ Frontend tag $FRONTEND_TAG exists"
+          else
+            echo "❌ Frontend tag $FRONTEND_TAG not found"
+            exit 1
+          fi
           
           sed -i "s/\${BACKEND_TAG}/$BACKEND_TAG/g" docker-compose.yml
           sed -i "s/\${FRONTEND_TAG}/$FRONTEND_TAG/g" docker-compose.yml
