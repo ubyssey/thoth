@@ -169,8 +169,8 @@ jobs:
 
       - name: Update docker service
         run: |
-          ssh production "docker service update --image ghcr.io/ubyssey/thoth:$BACKEND_TAG thoth_backend --force || true"
-          ssh production "docker service update --image ghcr.io/ubyssey/thoth-frontend:$FRONTEND_TAG thoth_frontend --force || true"
+          ssh production "docker service update --image ghcr.io/ubyssey/thoth:$BACKEND_TAG thoth_thothbackend --force || true"
+          ssh production "docker service update --image ghcr.io/ubyssey/thoth-frontend:$FRONTEND_TAG thoth_thothfrontend --force || true"
 
   build-failed:
     needs: build   
