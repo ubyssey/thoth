@@ -75,9 +75,8 @@ jobs:
   #           type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
   #         cache-to: |
   #           type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
-    
   deploy:
-    needs: build
+    # needs: build
     # Run deploy only if build succeeded or was skipped, AND frontend didn't fail
     # if: always() && (needs.build.result == 'success' || needs.build.result == 'skipped') && github.event.inputs.frontend_build_success != 'false'
     runs-on: ubuntu-latest
