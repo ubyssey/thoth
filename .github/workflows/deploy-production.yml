@@ -15,71 +15,68 @@ on:
         required: false
         default: true
         type: boolean
-  push:
-    branches:
-      - 1-run-ubysseyca-and-thothubysseyca-as-isolated-apps-on-docker-swarm-vm
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  # build:
-  #   runs-on: ubuntu-latest
-  #   # Skip build if triggered by workflow_dispatch with skip_build=true
-  #   if: github.event.inputs.skip_build != 'true'
+  build:
+    runs-on: ubuntu-latest
+    # Skip build if triggered by workflow_dispatch with skip_build=true
+    if: github.event.inputs.skip_build != 'true'
 
-  #   permissions:
-  #     contents: read
-  #     packages: write
-  #     attestations: write
-  #     id-token: write
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
 
-  #   steps:
-  #     - name: Checkout repository
-  #       uses: actions/checkout@v4
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
       
-  #     - name: Set up Docker Buildx
-  #       uses: docker/setup-buildx-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-  #     - name: Log in to the Container registry
-  #       uses: docker/login-action@v3
-  #       with:
-  #         registry: ${{ env.REGISTRY }}
-  #         username: ${{ github.actor }}
-  #         password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-  #     - name: Extract metadata (tags, labels) for Docker
-  #       id: meta
-  #       uses: docker/metadata-action@v4
-  #       with:
-  #         images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-  #         tags: |
-  #           type=schedule
-  #           type=ref,event=branch
-  #           type=ref,event=pr
-  #           type=semver,pattern=v{{version}}
-  #           type=semver,pattern={{major}}.{{minor}}
-  #           type=semver,pattern={{major}}
-  #           type=sha
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v4
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=schedule
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern=v{{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha
 
-  #     - name: Build and push Docker image
-  #       id: push
-  #       uses: docker/build-push-action@v6
-  #       with:
-  #         context: .
-  #         push: true
-  #         tags: ${{ steps.meta.outputs.tags }}
-  #         labels: ${{ steps.meta.outputs.labels }}
-  #         cache-from: |
-  #           type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
-  #         cache-to: |
-  #           type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
+      - name: Build and push Docker image
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: |
+            type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
+          cache-to: |
+            type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
     
   deploy:
     needs: build
     # Run deploy only if build succeeded or was skipped, AND frontend didn't fail
-    # if: always() && (needs.build.result == 'success' || needs.build.result == 'skipped') && github.event.inputs.frontend_build_success != 'false'
+    if: always() && (needs.build.result == 'success' || needs.build.result == 'skipped') && github.event.inputs.frontend_build_success != 'false'
     runs-on: ubuntu-latest
 
     permissions:
@@ -95,7 +92,7 @@ jobs:
           workload_identity_provider: 'projects/863738545301/locations/global/workloadIdentityPools/ubyssey-wif-pool-prd/providers/ubyssey-oidc-github-prd'
           service_account: 'deployment@ubyssey-prd.iam.gserviceaccount.com'
 
-      - name: Configure SSH (improved)
+      - name: Configure SSH
         run: |
           mkdir -p ~/.ssh/
           echo "$SSH_KEY" > ~/.ssh/production.key
@@ -124,24 +121,24 @@ jobs:
       - name: Deploy Thoth stack
         run: ssh production "docker stack deploy --compose-file /opt/thoth/docker-compose.yml thoth"
 
-  # build-failed:
-  #   needs: build
-  #   # Run only if deployment should be skipped due to build failures
-  #   if: always() && ((needs.build.result == 'failure') || (github.event.inputs.frontend_build_success == 'false'))
-  #   runs-on: ubuntu-latest
+  build-failed:
+    needs: build
+    # Run only if deployment should be skipped due to build failures
+    if: always() && ((needs.build.result == 'failure') || (github.event.inputs.frontend_build_success == 'false'))
+    runs-on: ubuntu-latest
 
-  #   steps:
-  #     - name: Report deployment failure
-  #       run: |
-  #         echo "=== Deployment Aborted ==="
+    steps:
+      - name: Report deployment failure
+        run: |
+          echo "=== Deployment Aborted ==="
           
-  #         if [ "${{ needs.build.result }}" == "failure" ]; then
-  #           echo "::error::Backend build failed - deployment aborted"
-  #         fi
+          if [ "${{ needs.build.result }}" == "failure" ]; then
+            echo "::error::Backend build failed - deployment aborted"
+          fi
           
-  #         if [ "${{ github.event.inputs.frontend_build_success }}" == "false" ]; then
-  #           echo "::error::Frontend build failed - deployment aborted"
-  #         fi
+          if [ "${{ github.event.inputs.frontend_build_success }}" == "false" ]; then
+            echo "::error::Frontend build failed - deployment aborted"
+          fi
           
-  #         echo "::error::Fix the build issues and try again"
-  #         exit 1
+          echo "::error::Fix the build issues and try again"
+          exit 1
