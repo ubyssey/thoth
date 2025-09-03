@@ -89,9 +89,9 @@ jobs:
     runs-on: ubuntu-latest
 
     # Define tags as job-level environment variables
-    env:
-      BACKEND_TAG: ${{ github.event.inputs.skip_backend_build == 'true' && (github.event.inputs.backend_version || 'latest') || github.ref_name }}
-      FRONTEND_TAG: ${{ github.event.inputs.frontend_version || 'latest' }}
+    # env:
+    #   BACKEND_TAG: ${{ github.event.inputs.skip_backend_build == 'true' && (github.event.inputs.backend_version || 'latest') || github.ref_name }}
+    #   FRONTEND_TAG: ${{ github.event.inputs.frontend_version || 'latest' }}
 
     permissions:
       contents: 'read'
@@ -99,6 +99,35 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+      
+      - name: Determine backend version
+        id: backend-version
+        run: |
+          if [ -n "${{ github.event.inputs.backend_version }}" ]; then
+            BACKEND_TAG="${{ github.event.inputs.backend_version }}"
+          else
+            BACKEND_TAG="${{ github.ref_name }}"
+          fi
+          echo "backend_tag=$BACKEND_TAG" >> $GITHUB_OUTPUT
+          echo "Using backend version: $BACKEND_TAG"
+
+      - name: Get frontend version
+        id: frontend-version
+        run: |
+          if [ -n "${{ github.event.inputs.frontend_version }}" ]; then
+            FRONTEND_TAG="${{ github.event.inputs.frontend_version }}"
+            echo "Using provided frontend version: $FRONTEND_TAG"
+          else
+            echo "Fetching latest frontend version..."
+            FRONTEND_TAG=$(curl -s "https://api.github.com/repos/ubyssey/thoth-frontend/releases/latest" | jq -r '.tag_name')
+            
+            if [ -z "$FRONTEND_TAG" ] || [ "$FRONTEND_TAG" = "null" ]; then
+              echo "::error::Failed to fetch latest frontend version"
+              exit 1
+            fi            
+          fi
+          echo "Using frontend version: $FRONTEND_TAG"
+          echo "frontend_tag=$FRONTEND_TAG" >> $GITHUB_OUTPUT
 
       - name: Authenticate with Google Cloud Platform
         uses: 'google-github-actions/auth@v2'
@@ -155,11 +184,11 @@ jobs:
       - name: Upload Docker Compose configuration
         run: scp docker-compose.yml production:/opt/thoth/docker-compose.yml
 
-      - name: Pull Docker images for frontend and backend in parallel
-        run: |
-          ssh production "docker pull ghcr.io/ubyssey/thoth:$BACKEND_TAG" &
-          ssh production "docker pull ghcr.io/ubyssey/thoth-frontend:$FRONTEND_TAG" &
-          wait  # Wait for both background processes to complete
+      # - name: Pull Docker images for frontend and backend in parallel
+      #   run: |
+      #     ssh production "docker pull ghcr.io/ubyssey/thoth:$BACKEND_TAG" &
+      #     ssh production "docker pull ghcr.io/ubyssey/thoth-frontend:$FRONTEND_TAG" &
+      #     wait  # Wait for both background processes to complete
 
       - name: Create shared network
         run: ssh production "docker network create --driver=overlay proxy-shared || true"
@@ -167,10 +196,10 @@ jobs:
       - name: Deploy Thoth stack
         run: ssh production "docker stack deploy --compose-file /opt/thoth/docker-compose.yml thoth"
 
-      - name: Update docker service
-        run: |
-          ssh production "docker service update --image ghcr.io/ubyssey/thoth:$BACKEND_TAG thoth_thothbackend --force || true"
-          ssh production "docker service update --image ghcr.io/ubyssey/thoth-frontend:$FRONTEND_TAG thoth_thothfrontend --force || true"
+      # - name: Update docker service
+      #   run: |
+      #     ssh production "docker service update --image ghcr.io/ubyssey/thoth:$BACKEND_TAG thoth_thothbackend --force || true"
+      #     ssh production "docker service update --image ghcr.io/ubyssey/thoth-frontend:$FRONTEND_TAG thoth_thothfrontend --force || true"
 
   build-failed:
     needs: build   
