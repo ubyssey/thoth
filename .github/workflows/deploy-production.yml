@@ -157,6 +157,9 @@ jobs:
       
       - name: Validate Docker images
         run: |
+          BACKEND_TAG="${{ steps.backend-version.outputs.backend_tag }}"
+          FRONTEND_TAG="${{ steps.frontend-version.outputs.frontend_tag }}"
+
           echo "Using backend tag: $BACKEND_TAG"
           echo "Using frontend tag: $FRONTEND_TAG"
           
@@ -178,6 +181,9 @@ jobs:
 
       - name: Set tags in docker-compose.yml
         run: |
+          BACKEND_TAG="${{ steps.backend-version.outputs.backend_tag }}"
+          FRONTEND_TAG="${{ steps.frontend-version.outputs.frontend_tag }}"
+
           sed -i "s/\${BACKEND_TAG}/$BACKEND_TAG/g" docker-compose.yml
           sed -i "s/\${FRONTEND_TAG}/$FRONTEND_TAG/g" docker-compose.yml
 
