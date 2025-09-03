@@ -18,12 +18,12 @@ on:
       frontend_version:
         description: 'Frontend version tag to deploy'
         required: false
-        default: 'latest'
+        default: ''
         type: string
       backend_version:
         description: 'Backend version tag to deploy'
         required: false
-        default: 'latest'
+        default: ''
         type: string
 
 env:
