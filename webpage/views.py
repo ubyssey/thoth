@@ -50,14 +50,35 @@ def read_domain(request):
 
 @async_to_sync
 async def read_all():
-    DOMAIN_TIMEOUT = timezone.timedelta(minutes=30)
-    MAX_TASKS = 1
+    DOMAIN_TIMEOUT = timezone.timedelta(hours=12)
+    CONCURRENCY = 5
+
+    semaphore = asyncio.Semaphore(CONCURRENCY)  # Only 10 concurrent requests
+    times = []
+    domain_count = 0
+    full_start_time = timezone.now()
+    async def controlled_fetch(domain):
+        async with semaphore:
+            start_time = timezone.now()
+            result = await domain.read_webpages()
+            times.append(0)
+
+            print(f"{timezone.now() - full_start_time} - {len(times)}/{domain_count}")
+            return result
 
     tasks = []
-    domain_query = Q(time_last_requested__lte=timezone.now() - DOMAIN_TIMEOUT) | Q(time_last_requested=None)
-    #async for domain in Domain.objects.filter(domain_query).order_by("-is_source", F("time_updated").desc(nulls_last=True), "time_discovered"):
-    async for domain in Domain.objects.filter(domain_query).order_by("time_last_requested"):
-        wps = await domain.read_webpages()
+    domain_query = Q(Q(time_last_requested__lte=timezone.now() - DOMAIN_TIMEOUT) | Q(time_last_requested=None), Q(is_source=True))
+
+    domains = await sync_to_async(list)(Domain.objects.filter(domain_query).order_by("time_last_requested"))
+    domain_count = len(domains)
+    print(f"domains: {len(domains)}")
+
+    tasks = [controlled_fetch(domain) for domain in domains]
+    await asyncio.gather(*tasks)
+
+    #async for domain in Domain.objects.filter(domain_query).order_by("-is_source", F("time_updated").desc(nulls_last=True), "time_discovered"):    
+    #async for domain in Domain.objects.filter(domain_query).order_by("time_last_requested"):
+        #wps = await domain.read_webpages()
         #tasks = tasks + wps
 
         #if len(tasks) >= MAX_TASKS:

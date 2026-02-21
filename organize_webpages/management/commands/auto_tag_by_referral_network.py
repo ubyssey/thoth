@@ -50,13 +50,10 @@ class Command(BaseCommand):
                     }
 
             start = timezone.now()
-            included_domains = Domain.objects.filter(is_redirect=False, is_source=True).exclude(time_last_requested=None).order_by(F("time_updated").desc(nulls_last=True))
+            included_domains = await async_to_sync(list)(Domain.objects.filter(is_redirect=False, is_source=True).exclude(time_last_requested=None).order_by(F("time_updated").desc(nulls_last=True)))
             
-            tasks = []
-            async for domain in included_domains:
-                #tasks.append(asyncio.create_task(get_reffers(domain)))
-                await get_reffers(domain)
-            #await asyncio.gather(*tasks)
+            tasks = [get_reffers(domain) for domain in included_domains]
+            await asyncio.gather(*tasks)
 
             print((timezone.now() - start).total_seconds())
             '''
